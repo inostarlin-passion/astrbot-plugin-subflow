@@ -48,7 +48,8 @@ PROGRESS_IN_PROGRESS = "进行中"
 PROGRESS_DONE = "已完成"
 PROGRESS_ARCHIVED = "归档"
 
-SEGMENT_WHOLE = "全集"
+SEGMENT_NONE = "0"  # D12：「不分段」字面值；替代旧的「全集」
+SEGMENT_WHOLE = SEGMENT_NONE  # 兼容别名，老引用都指向 "0"
 
 _TERMINAL_PROGRESS = {PROGRESS_DONE, PROGRESS_ARCHIVED}
 
@@ -96,12 +97,11 @@ class SegmentMismatchError(TaskError):
     """新建集时分段参数与流水线不匹配（如有 segment=True 的工序却没传分段）。"""
 
 
-# ============================================================ D6 normalization
+# ============================================================ D6 / D12 normalization
 
 
 _EPISODE_PREFIX = re.compile(r"^第\s*")
 _EPISODE_SUFFIX = re.compile(r"\s*集$")
-_SEGMENT_KEEP = re.compile(r"^(p\d+)", re.IGNORECASE)
 
 
 def normalize_episode(raw: str) -> str:
@@ -126,19 +126,19 @@ def normalize_episode(raw: str) -> str:
 
 
 def normalize_segment(raw: str) -> str:
-    """分段归一化：「P1（0-8）」/「P1(0-8)」/「p1」全部 → "p1"；「全集」保留。"""
+    """D12 分段归一化：纯数字串去前导零；非数字小写化保留。
+
+    - `None` / `""` → `""`
+    - `"02"` → `"2"`；`"00"` → `"0"`；`"0"` → `"0"`
+    - `"OP"` → `"op"`（实际分段不该出现字母，做防御）
+    """
     if raw is None:
         return ""
     s = str(raw).strip().lower()
     if not s:
         return ""
-    if s == SEGMENT_WHOLE.lower():
-        return SEGMENT_WHOLE.lower()
-    m = _SEGMENT_KEEP.match(s)
-    if m:
-        return m.group(1).lower()
-    # 兜底：直接用整串（小写、去括号内容）
-    s = re.sub(r"[\(\（].*?[\)\）]", "", s).strip()
+    if s.isdigit():
+        return s.lstrip("0") or "0"
     return s
 
 
@@ -276,15 +276,19 @@ class TaskManager:
         self,
         show: str,
         episode: str,
-        segments: dict[str, str] | None = None,
+        segment_count: int = 1,
     ) -> CreateEpisodeOutcome:
         """新建一集所有任务（D10 同时快照流水线）。
 
-        segments: {"P1": "0-8", "P2": "8-16"} —— 段名 → 范围描述
-        - 流水线里有 segment=True 的工序 → 每段一条记录（"P1（0-8）"）
-        - 流水线里 segment=False 的工序 → 只生成「全集」一条
-        - segments 为空但流水线有需分段工序 → 报 SegmentMismatchError
+        D12 格式：
+        - 流水线里有 segment=True 的工序 → 各生成 segment_count 条记录，分段值为 "1".."N"
+        - 流水线里 segment=False 的工序 → 只生成 1 条，分段值为 "0"
+        - segment_count < 1 → SegmentMismatchError
         """
+        if segment_count < 1:
+            raise SegmentMismatchError(
+                f"分段数必须 ≥ 1（当前 {segment_count}）"
+            )
         binding = self._bindings.get(show)
         if binding is None:
             from .exceptions import AliasNotFoundError
@@ -292,7 +296,7 @@ class TaskManager:
         await self._ensure_no_episode_duplicate(binding, episode)
         pipeline = self._pipelines.get_pipeline(show)
 
-        rows = self._expand_pipeline_rows(pipeline, episode, segments or {})
+        rows = self._expand_pipeline_rows(pipeline, episode, segment_count)
         if not rows:
             raise SegmentMismatchError("流水线为空，没有任何要生成的任务")
 
@@ -369,7 +373,7 @@ class TaskManager:
             {
                 COL_TYPE: name,
                 COL_EPISODE: episode,
-                COL_SEGMENT: SEGMENT_WHOLE,
+                COL_SEGMENT: SEGMENT_NONE,
                 COL_ASSIGNEE: "",
                 COL_PROGRESS: PROGRESS_UNASSIGNED,
                 COL_REMARK: "",
@@ -392,22 +396,24 @@ class TaskManager:
         self,
         pipeline: Pipeline,
         episode: str,
-        segments: dict[str, str],
+        segment_count: int,
     ) -> list[dict[str, object]]:
-        has_segmented = any(s.segment for s in pipeline)
-        if has_segmented and not segments:
+        """D12：分段工序各生成 segment_count 条（值 "1".."N"），
+        不分段工序生成 1 条（值 "0"）。
+        """
+        if segment_count < 1:
             raise SegmentMismatchError(
-                "流水线中有需要分段的工序，请用 P1=起-止 P2=起-止 形式指明各段"
+                f"分段数必须 ≥ 1（当前 {segment_count}）"
             )
         rows: list[dict[str, object]] = []
         for stage in pipeline:
             if stage.segment:
-                for seg_label, seg_range in segments.items():
+                for i in range(1, segment_count + 1):
                     rows.append(
                         {
                             COL_TYPE: stage.stage,
                             COL_EPISODE: episode,
-                            COL_SEGMENT: f"{seg_label}（{seg_range}）",
+                            COL_SEGMENT: str(i),
                             COL_ASSIGNEE: "",
                             COL_PROGRESS: PROGRESS_UNASSIGNED,
                             COL_REMARK: "",
@@ -418,7 +424,7 @@ class TaskManager:
                     {
                         COL_TYPE: stage.stage,
                         COL_EPISODE: episode,
-                        COL_SEGMENT: SEGMENT_WHOLE,
+                        COL_SEGMENT: SEGMENT_NONE,
                         COL_ASSIGNEE: "",
                         COL_PROGRESS: PROGRESS_UNASSIGNED,
                         COL_REMARK: "",

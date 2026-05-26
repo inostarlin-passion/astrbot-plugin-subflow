@@ -14,7 +14,7 @@ from nonebot.exception import FinishedException, MatcherException
 from nonebot_plugin_subflow import commands
 from nonebot_plugin_subflow.commands import (
     _parse_kv,
-    _parse_segments,
+    _parse_segment_count,
     _send_user_error,
     _split_args,
 )
@@ -43,31 +43,32 @@ def test_split_args_empty() -> None:
     assert _split_args(Message("")) == []
 
 
-# ============================================================ _parse_segments
+# ============================================================ _parse_segment_count (D12)
 
 
-def test_parse_segments_basic() -> None:
-    assert _parse_segments(["P1=0-8", "P2=8-16", "P3=16-END"]) == {
-        "P1": "0-8",
-        "P2": "8-16",
-        "P3": "16-END",
-    }
+def test_parse_segment_count_basic() -> None:
+    assert _parse_segment_count("3") == 3
+    assert _parse_segment_count("1") == 1
+    assert _parse_segment_count("10") == 10
 
 
-def test_parse_segments_strips_whitespace() -> None:
-    assert _parse_segments(["P1 = 0-8 "]) == {"P1": "0-8"}
+def test_parse_segment_count_default_when_none_or_empty() -> None:
+    assert _parse_segment_count(None) == 1
+    assert _parse_segment_count("") == 1
 
 
-def test_parse_segments_rejects_missing_equals() -> None:
-    with pytest.raises(ValueError, match="分段参数"):
-        _parse_segments(["P1"])
+def test_parse_segment_count_rejects_non_integer() -> None:
+    with pytest.raises(ValueError, match="必须是整数"):
+        _parse_segment_count("abc")
+    with pytest.raises(ValueError, match="必须是整数"):
+        _parse_segment_count("1.5")
 
 
-def test_parse_segments_rejects_empty_value() -> None:
-    with pytest.raises(ValueError, match="分段参数为空"):
-        _parse_segments(["P1="])
-    with pytest.raises(ValueError, match="分段参数为空"):
-        _parse_segments(["=0-8"])
+def test_parse_segment_count_rejects_zero_or_negative() -> None:
+    with pytest.raises(ValueError, match="必须 ≥ 1"):
+        _parse_segment_count("0")
+    with pytest.raises(ValueError, match="必须 ≥ 1"):
+        _parse_segment_count("-2")
 
 
 # ============================================================ _parse_kv

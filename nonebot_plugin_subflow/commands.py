@@ -69,21 +69,17 @@ def _split_args(args: Message) -> list[str]:
     return args.extract_plain_text().strip().split()
 
 
-def _parse_segments(tokens: list[str]) -> dict[str, str]:
-    """`P1=0-8 P2=8-16 P3=16-END` → dict。"""
-    out: dict[str, str] = {}
-    for t in tokens:
-        if "=" not in t:
-            raise ValueError(
-                f"分段参数格式错误：{t}（应为 P1=0-8 P2=8-16 这种形式）"
-            )
-        k, v = t.split("=", 1)
-        k = k.strip()
-        v = v.strip()
-        if not k or not v:
-            raise ValueError(f"分段参数为空：{t}")
-        out[k] = v
-    return out
+def _parse_segment_count(token: str | None) -> int:
+    """D12：`/新建集 X 7 3` 里的 "3" → 3；省略则默认 1。"""
+    if token is None or token == "":
+        return 1
+    try:
+        n = int(token)
+    except ValueError:
+        raise ValueError(f"分段数必须是整数：「{token}」")
+    if n < 1:
+        raise ValueError(f"分段数必须 ≥ 1（当前 {n}）")
+    return n
 
 
 def _parse_kv(token: str) -> tuple[str, str]:
@@ -331,26 +327,28 @@ async def _handle_create_episode(
     try:
         await _reject_if_main_group(create_episode_matcher, event)
         tokens = _split_args(args)
-        if len(tokens) < 2:
+        if len(tokens) < 1:
             await create_episode_matcher.finish(
-                "用法：/新建集 <番剧名> <集数> [P1=起-止 P2=起-止 ...]"
+                "用法：/新建集 <番剧名> <集数> [分段数=1]"
             )
-        show_or_episode, *rest = tokens
-        # 一群多番时 show 是必填；单绑定时可省（第一 token 就是集数）
+        # D12 语法：<番剧名> <集数> [分段数]；单绑定时番剧名可省
         bindings = deps.require_bindings()
+        first, *rest = tokens
         try:
-            entry = bindings.resolve(group_id=event.group_id, hint=show_or_episode)
+            entry = bindings.resolve(group_id=event.group_id, hint=first)
             episode = rest[0] if rest else None
-            segments_tokens = rest[1:]
+            seg_count_token = rest[1] if len(rest) >= 2 else None
         except Exception:
             entry = bindings.resolve(group_id=event.group_id, hint=None)
-            episode = show_or_episode
-            segments_tokens = rest
+            episode = first
+            seg_count_token = rest[0] if rest else None
         if not episode:
-            await create_episode_matcher.finish("用法：/新建集 <番剧名> <集数> [P1=...]")
-        segments = _parse_segments(segments_tokens) if segments_tokens else {}
+            await create_episode_matcher.finish(
+                "用法：/新建集 <番剧名> <集数> [分段数=1]"
+            )
+        segment_count = _parse_segment_count(seg_count_token)
         tm = deps.require_task_manager()
-        outcome = await tm.create_episode(entry.alias, episode, segments)
+        outcome = await tm.create_episode(entry.alias, episode, segment_count)
         await create_episode_matcher.send(render.render_create_episode(outcome))
     except Exception as exc:
         await _send_user_error(create_episode_matcher, exc)

@@ -36,7 +36,7 @@ from nonebot_plugin_subflow.task_manager import (
     PROGRESS_ASSIGNED,
     PROGRESS_DONE,
     PROGRESS_UNASSIGNED,
-    SEGMENT_WHOLE,
+    SEGMENT_NONE,
     AbandonOutcome,
     ArchiveOutcome,
     ClaimOutcome,
@@ -79,7 +79,7 @@ def _make_record(**values) -> Record:
     defaults = {
         COL_TYPE: "翻译",
         COL_EPISODE: "07",
-        COL_SEGMENT: "P1（0-8）",
+        COL_SEGMENT: "1",
         COL_ASSIGNEE: "100",
         COL_PROGRESS: PROGRESS_ASSIGNED,
         COL_REMARK: "",
@@ -88,7 +88,7 @@ def _make_record(**values) -> Record:
     return Record(record_id="r1", values=defaults)
 
 
-def _ref(stage: str = "翻译", segment: str = "P1（0-8）") -> TaskRef:
+def _ref(stage: str = "翻译", segment: str = "1") -> TaskRef:
     return TaskRef(show="淡岛百景", episode="07", stage=stage, segment=segment)
 
 
@@ -96,7 +96,7 @@ def test_render_claim_includes_at_and_label() -> None:
     msg = render_claim(ClaimOutcome(task=_make_record(), ref=_ref()))
     text = str(msg)
     assert "[CQ:at,qq=100]" in text
-    assert "淡岛百景07 翻译 P1（0-8）" in text
+    assert "淡岛百景07 翻译 1" in text
     assert "✅" in text
 
 
@@ -243,8 +243,8 @@ def test_render_create_episode_announcement() -> None:
         _make_record(**{COL_TYPE: "翻译", COL_SEGMENT: f"P{i}（...）"})
         for i in range(1, 4)
     ] + [
-        _make_record(**{COL_TYPE: "校对", COL_SEGMENT: SEGMENT_WHOLE}),
-        _make_record(**{COL_TYPE: "压制", COL_SEGMENT: SEGMENT_WHOLE}),
+        _make_record(**{COL_TYPE: "校对", COL_SEGMENT: SEGMENT_NONE}),
+        _make_record(**{COL_TYPE: "压制", COL_SEGMENT: SEGMENT_NONE}),
     ]
     outcome = CreateEpisodeOutcome(
         show="淡岛百景",
@@ -319,20 +319,20 @@ def test_render_progress_includes_all_columns_in_pipeline_order() -> None:
     records = [
         _make_record(**{
             COL_TYPE: "翻译",
-            COL_SEGMENT: "P1（0-8）",
+            COL_SEGMENT: "1",
             COL_PROGRESS: PROGRESS_DONE,
             COL_DONE_TIME: datetime(2026, 5, 20, 18, 0),
             COL_ASSIGNEE: "100",
         }),
         _make_record(**{
             COL_TYPE: "翻译",
-            COL_SEGMENT: "P2（8-16）",
+            COL_SEGMENT: "2",
             COL_PROGRESS: PROGRESS_UNASSIGNED,
             COL_ASSIGNEE: "",
         }),
         _make_record(**{
             COL_TYPE: "校对",
-            COL_SEGMENT: SEGMENT_WHOLE,
+            COL_SEGMENT: SEGMENT_NONE,
             COL_PROGRESS: PROGRESS_UNASSIGNED,
             COL_ASSIGNEE: "",
         }),
@@ -357,8 +357,8 @@ def test_render_progress_empty_records_shows_placeholder() -> None:
 
 def test_render_my_tasks_with_entries() -> None:
     tasks = [
-        ("淡岛百景", _make_record(**{COL_TYPE: "翻译", COL_SEGMENT: "P1（0-8）"})),
-        ("孤独摇滚", _make_record(**{COL_TYPE: "时轴", COL_SEGMENT: SEGMENT_WHOLE})),
+        ("淡岛百景", _make_record(**{COL_TYPE: "翻译", COL_SEGMENT: "1"})),
+        ("孤独摇滚", _make_record(**{COL_TYPE: "时轴", COL_SEGMENT: SEGMENT_NONE})),
     ]
     text = render_my_tasks(100, tasks)
     assert "@100" in text
@@ -374,13 +374,13 @@ def test_render_available_emits_commands() -> None:
     tasks = [
         ("淡岛百景", _make_record(**{
             COL_TYPE: "翻译",
-            COL_SEGMENT: "P1（0-8）",
+            COL_SEGMENT: "1",
             COL_ASSIGNEE: "",
             COL_PROGRESS: PROGRESS_UNASSIGNED,
         })),
     ]
     text = render_available(tasks)
-    assert "/接活 淡岛百景 07 翻译 P1（0-8）" in text
+    assert "/接活 淡岛百景 07 翻译 1" in text
 
 
 def test_render_available_empty() -> None:

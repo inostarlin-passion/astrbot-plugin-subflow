@@ -26,7 +26,7 @@ from .task_manager import (
     PROGRESS_DONE,
     PROGRESS_IN_PROGRESS,
     PROGRESS_UNASSIGNED,
-    SEGMENT_WHOLE,
+    SEGMENT_NONE,
     AbandonOutcome,
     ArchiveOutcome,
     ClaimOutcome,
@@ -50,11 +50,19 @@ def assignee_segment(raw: str | None) -> MessageSegment:
 
 
 def _task_label(ref) -> str:
-    """形如「淡岛百景07 翻译 P1（0-8）」或「淡岛百景07 校对」（全集省略）。"""
+    """形如「淡岛百景7 翻译 2」或「淡岛百景7 校对」（不分段省略 segment）。"""
     base = f"{ref.show}{ref.episode} {ref.stage}"
-    if ref.segment and ref.segment != SEGMENT_WHOLE:
+    if ref.segment and ref.segment != SEGMENT_NONE:
         return f"{base} {ref.segment}"
     return base
+
+
+def _segment_sort_key(seg: str) -> int:
+    """同工序的分段按 int 排序，避免 '10' 排在 '2' 前面。"""
+    try:
+        return int(seg)
+    except (TypeError, ValueError):
+        return 0
 
 
 _PROGRESS_ICON = {
@@ -229,7 +237,7 @@ def render_progress(show: str, episode: str, records: list[Record]) -> str:
         records,
         key=lambda r: (
             type_order.get(r.values.get(COL_TYPE, ""), 999),
-            str(r.values.get(COL_SEGMENT, "")),
+            _segment_sort_key(r.values.get(COL_SEGMENT, "")),
         ),
     )
     for r in records_sorted:
@@ -237,7 +245,7 @@ def render_progress(show: str, episode: str, records: list[Record]) -> str:
         icon = _PROGRESS_ICON.get(progress, "❓")
         label = r.values.get(COL_TYPE, "?")
         segment = r.values.get(COL_SEGMENT, "")
-        if segment and segment != SEGMENT_WHOLE:
+        if segment and segment != SEGMENT_NONE:
             label = f"{label} {segment}"
         assignee = r.values.get(COL_ASSIGNEE) or ""
         assignee_display = (
@@ -269,7 +277,7 @@ def render_my_tasks(user_qq: int, tasks: list[tuple[str, Record]]) -> str:
             rec.values.get(COL_PROGRESS, ""), "•"
         )
         seg = rec.values.get(COL_SEGMENT, "")
-        seg_part = f" {seg}" if seg and seg != SEGMENT_WHOLE else ""
+        seg_part = f" {seg}" if seg and seg != SEGMENT_NONE else ""
         lines.append(
             f"  {icon} {show}{rec.values.get(COL_EPISODE)} "
             f"{rec.values.get(COL_TYPE)}{seg_part}"
@@ -283,7 +291,7 @@ def render_available(tasks: list[tuple[str, Record]]) -> str:
     lines = [f"共 {len(tasks)} 个可接任务："]
     for show, rec in tasks:
         seg = rec.values.get(COL_SEGMENT, "")
-        seg_part = f" {seg}" if seg and seg != SEGMENT_WHOLE else ""
+        seg_part = f" {seg}" if seg and seg != SEGMENT_NONE else ""
         cmd = (
             f"/接活 {show} {rec.values.get(COL_EPISODE)} "
             f"{rec.values.get(COL_TYPE)}{seg_part}".rstrip()

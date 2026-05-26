@@ -29,7 +29,7 @@ from nonebot_plugin_subflow.task_manager import (
     EpisodeAlreadyExistsError,
     NoPendingConfirmationError,
     PredecessorNotDoneError,
-    SEGMENT_WHOLE,
+    SEGMENT_NONE,
     SegmentMismatchError,
     TaskAlreadyAssignedError,
     TaskManager,
@@ -113,14 +113,17 @@ def test_normalize_episode(raw, expected) -> None:
 @pytest.mark.parametrize(
     "raw, expected",
     [
-        ("P1（0-8）", "p1"),
-        ("P1(0-8)", "p1"),
-        ("p1", "p1"),
-        ("P2", "p2"),
-        ("全集", "全集"),
-        ("全集", "全集"),
+        ("1", "1"),
+        ("02", "2"),
+        ("0", "0"),
+        ("00", "0"),
+        ("10", "10"),
+        ("  3  ", "3"),
         ("", ""),
-        ("P10（16-END）", "p10"),
+        (None, ""),
+        # 防御：非数字进来也不崩
+        ("op", "op"),
+        ("OP", "op"),
     ],
 )
 def test_normalize_segment(raw, expected) -> None:
@@ -131,44 +134,58 @@ def test_normalize_segment(raw, expected) -> None:
 
 
 async def test_create_episode_expands_pipeline(tm: TaskManager, setup) -> None:
-    outcome = await tm.create_episode(
-        SHOW, "07", {"P1": "0-8", "P2": "8-16", "P3": "16-END"}
-    )
+    """D12：/新建集 X 7 3 → 翻译/时轴各 3 段（'1'/'2'/'3'），其它工序 1 条 '0'。"""
+    outcome = await tm.create_episode(SHOW, "07", 3)
     # 6 工序：翻译×3 + 时轴×3 + 校对 + 后期 + 监制 + 压制 = 10 条
     assert len(outcome.inserted) == 10
-    # 翻译 / 时轴 应该有 segment 形式
     by_type: dict[str, list] = {}
     for r in outcome.inserted:
         by_type.setdefault(r.values[COL_TYPE], []).append(r)
     assert len(by_type["翻译"]) == 3
     assert len(by_type["时轴"]) == 3
     assert len(by_type["校对"]) == 1
-    assert by_type["校对"][0].values[COL_SEGMENT] == SEGMENT_WHOLE
-    # 翻译第一段的分段标签
+    assert by_type["校对"][0].values[COL_SEGMENT] == SEGMENT_NONE  # "0"
     seg_labels = {r.values[COL_SEGMENT] for r in by_type["翻译"]}
-    assert seg_labels == {"P1（0-8）", "P2（8-16）", "P3（16-END）"}
-    # 初始可接：翻译 + 时轴（无 depends_on）
+    assert seg_labels == {"1", "2", "3"}
     assert set(outcome.initial_unlocked_stages) == {"翻译", "时轴"}
-    # 快照应已存
     assert setup["pipelines"].has_snapshot(SHOW, "07")
 
 
+async def test_create_episode_segment_count_one(tm: TaskManager) -> None:
+    """单段：翻译/时轴各 1 条（'1'），其它仍 '0'。"""
+    outcome = await tm.create_episode(SHOW, "07", 1)
+    by_type: dict[str, list] = {}
+    for r in outcome.inserted:
+        by_type.setdefault(r.values[COL_TYPE], []).append(r)
+    assert len(by_type["翻译"]) == 1
+    assert by_type["翻译"][0].values[COL_SEGMENT] == "1"
+    assert by_type["校对"][0].values[COL_SEGMENT] == "0"
+
+
+async def test_create_episode_segment_count_default_is_one(tm: TaskManager) -> None:
+    outcome = await tm.create_episode(SHOW, "07")
+    by_type: dict[str, list] = {}
+    for r in outcome.inserted:
+        by_type.setdefault(r.values[COL_TYPE], []).append(r)
+    assert len(by_type["翻译"]) == 1
+
+
 async def test_create_episode_rejects_duplicate(tm: TaskManager) -> None:
-    await tm.create_episode(SHOW, "07", {"P1": "0-8"})
+    await tm.create_episode(SHOW, "07", 1)
     with pytest.raises(EpisodeAlreadyExistsError):
-        await tm.create_episode(SHOW, "7", {"P1": "0-8"})  # 归一化后等于 07
+        await tm.create_episode(SHOW, "7", 1)  # 归一化后等于 07
 
 
-async def test_create_episode_requires_segments_for_segmented_pipeline(
+async def test_create_episode_rejects_zero_segment_count(
     tm: TaskManager,
 ) -> None:
     with pytest.raises(SegmentMismatchError):
-        await tm.create_episode(SHOW, "07", {})
+        await tm.create_episode(SHOW, "07", 0)
 
 
 async def test_create_episode_unknown_show_raises(tm: TaskManager) -> None:
     with pytest.raises(AliasNotFoundError):
-        await tm.create_episode("不存在的番剧", "07", {"P1": "0-8"})
+        await tm.create_episode("不存在的番剧", "07", 1)
 
 
 # ============================================================ create_special
@@ -181,8 +198,8 @@ async def test_create_special_only_specified_stages(
     assert len(outcome.inserted) == 4
     types = {r.values[COL_TYPE] for r in outcome.inserted}
     assert types == {"翻译", "时轴", "校对", "压制"}
-    # 全部「全集」
-    assert all(r.values[COL_SEGMENT] == SEGMENT_WHOLE for r in outcome.inserted)
+    # D12：所有特殊任务分段均为 "0"
+    assert all(r.values[COL_SEGMENT] == SEGMENT_NONE for r in outcome.inserted)
     # 初始可接：翻译 + 时轴（depends_on 是空）
     assert set(outcome.initial_unlocked_stages) == {"翻译", "时轴"}
     # 快照：4 个工序，深度关系做传递闭包替换：
@@ -219,8 +236,8 @@ async def test_create_special_compress_cannot_be_claimed_until_proof(
 
 
 async def test_claim_task_happy_path(tm: TaskManager) -> None:
-    await tm.create_episode(SHOW, "07", {"P1": "0-8"})
-    outcome = await tm.claim_task(SHOW, "07", "翻译", "P1", user_qq=100)
+    await tm.create_episode(SHOW, "07", 1)
+    outcome = await tm.claim_task(SHOW, "07", "翻译", "1", user_qq=100)
     assert outcome.task.values[COL_ASSIGNEE] == "100"
     assert outcome.task.values[COL_PROGRESS] == PROGRESS_ASSIGNED
     assert outcome.ref.episode == "07"
@@ -230,39 +247,39 @@ async def test_claim_task_happy_path(tm: TaskManager) -> None:
 async def test_claim_task_with_normalized_episode_and_segment(
     tm: TaskManager,
 ) -> None:
-    await tm.create_episode(SHOW, "07", {"P1": "0-8"})
-    # 用户用 "7" 和 "p1" 也能匹配上
-    outcome = await tm.claim_task(SHOW, "7", "翻译", "p1", user_qq=100)
+    await tm.create_episode(SHOW, "07", 1)
+    # 用户用 "7" 和 "01" 也能匹配上（数字前导零）
+    outcome = await tm.claim_task(SHOW, "7", "翻译", "01", user_qq=100)
     assert outcome.task.values[COL_ASSIGNEE] == "100"
 
 
 async def test_claim_task_already_assigned_raises(tm: TaskManager) -> None:
-    await tm.create_episode(SHOW, "07", {"P1": "0-8"})
-    await tm.claim_task(SHOW, "07", "翻译", "P1", user_qq=100)
+    await tm.create_episode(SHOW, "07", 1)
+    await tm.claim_task(SHOW, "07", "翻译", "1", user_qq=100)
     with pytest.raises(TaskAlreadyAssignedError):
-        await tm.claim_task(SHOW, "07", "翻译", "P1", user_qq=200)
+        await tm.claim_task(SHOW, "07", "翻译", "1", user_qq=200)
 
 
 async def test_claim_task_predecessor_not_done_raises(tm: TaskManager) -> None:
-    await tm.create_episode(SHOW, "07", {"P1": "0-8"})
+    await tm.create_episode(SHOW, "07", 1)
     # 校对 依赖 翻译 + 时轴，都没完成
     with pytest.raises(PredecessorNotDoneError):
         await tm.claim_task(SHOW, "07", "校对", None, user_qq=100)
 
 
 async def test_claim_task_unknown_segment_raises(tm: TaskManager) -> None:
-    await tm.create_episode(SHOW, "07", {"P1": "0-8"})
+    await tm.create_episode(SHOW, "07", 1)
     with pytest.raises(TaskNotFoundError):
-        await tm.claim_task(SHOW, "07", "翻译", "P9", user_qq=100)
+        await tm.claim_task(SHOW, "07", "翻译", "99", user_qq=100)
 
 
 async def test_claim_task_unsegmented_can_omit_segment(tm: TaskManager) -> None:
     # 完成翻译/时轴所有分段后，校对（不分段）应能用 segment=None 接
-    await tm.create_episode(SHOW, "07", {"P1": "0-8"})
-    await tm.claim_task(SHOW, "07", "翻译", "P1", user_qq=100)
-    await tm.complete_task(SHOW, "07", "翻译", "P1", user_qq=100)
-    await tm.claim_task(SHOW, "07", "时轴", "P1", user_qq=100)
-    await tm.complete_task(SHOW, "07", "时轴", "P1", user_qq=100)
+    await tm.create_episode(SHOW, "07", 1)
+    await tm.claim_task(SHOW, "07", "翻译", "1", user_qq=100)
+    await tm.complete_task(SHOW, "07", "翻译", "1", user_qq=100)
+    await tm.claim_task(SHOW, "07", "时轴", "1", user_qq=100)
+    await tm.complete_task(SHOW, "07", "时轴", "1", user_qq=100)
     outcome = await tm.claim_task(SHOW, "07", "校对", None, user_qq=100)
     assert outcome.task.values[COL_TYPE] == "校对"
 
@@ -276,20 +293,20 @@ async def test_claim_task_max_tasks_enforced(setup, tm: TaskManager) -> None:
         max_tasks_per_user=2,
         confirm_timeout_seconds=30,
     )
-    await tm.create_episode(SHOW, "07", {"P1": "0-8", "P2": "8-16", "P3": "16-END"})
-    await tm.claim_task(SHOW, "07", "翻译", "P1", user_qq=100)
-    await tm.claim_task(SHOW, "07", "翻译", "P2", user_qq=100)
+    await tm.create_episode(SHOW, "07", 3)
+    await tm.claim_task(SHOW, "07", "翻译", "1", user_qq=100)
+    await tm.claim_task(SHOW, "07", "翻译", "2", user_qq=100)
     with pytest.raises(TooManyActiveTasksError):
-        await tm.claim_task(SHOW, "07", "翻译", "P3", user_qq=100)
+        await tm.claim_task(SHOW, "07", "翻译", "3", user_qq=100)
 
 
 async def test_claim_task_concurrent_only_one_wins(tm: TaskManager) -> None:
     """D5 全链路验证：同时两人 /接活 → 一成一败。"""
-    await tm.create_episode(SHOW, "07", {"P1": "0-8"})
+    await tm.create_episode(SHOW, "07", 1)
 
     async def claim(user: int) -> str:
         try:
-            await tm.claim_task(SHOW, "07", "翻译", "P1", user_qq=user)
+            await tm.claim_task(SHOW, "07", "翻译", "1", user_qq=user)
             return f"{user}-ok"
         except TaskAlreadyAssignedError:
             return f"{user}-busy"
@@ -305,11 +322,11 @@ async def test_claim_task_concurrent_only_one_wins(tm: TaskManager) -> None:
 async def test_complete_task_sets_terminal_state_and_time(
     setup, tm: TaskManager
 ) -> None:
-    await tm.create_episode(SHOW, "07", {"P1": "0-8"})
-    await tm.claim_task(SHOW, "07", "翻译", "P1", user_qq=100)
+    await tm.create_episode(SHOW, "07", 1)
+    await tm.claim_task(SHOW, "07", "翻译", "1", user_qq=100)
     fixed_time = datetime(2026, 5, 26, 18, 0, 0)
     tm._clock = lambda: fixed_time  # 注入固定时间
-    outcome = await tm.complete_task(SHOW, "07", "翻译", "P1", user_qq=100)
+    outcome = await tm.complete_task(SHOW, "07", "翻译", "1", user_qq=100)
     assert outcome.task.values[COL_PROGRESS] == PROGRESS_DONE
     assert outcome.task.values[COL_DONE_TIME] == fixed_time
     assert outcome.sender_was_assignee
@@ -320,9 +337,9 @@ async def test_complete_task_by_non_assignee_records_warning(
     tm: TaskManager,
 ) -> None:
     """D3：非组员也能 /完成，但 outcome 标记给命令层加提醒。"""
-    await tm.create_episode(SHOW, "07", {"P1": "0-8"})
-    await tm.claim_task(SHOW, "07", "翻译", "P1", user_qq=100)
-    outcome = await tm.complete_task(SHOW, "07", "翻译", "P1", user_qq=999)
+    await tm.create_episode(SHOW, "07", 1)
+    await tm.claim_task(SHOW, "07", "翻译", "1", user_qq=100)
+    outcome = await tm.complete_task(SHOW, "07", "翻译", "1", user_qq=999)
     assert outcome.sender_was_assignee is False
     assert outcome.original_assignee_raw == "100"
 
@@ -331,10 +348,10 @@ async def test_complete_task_reports_same_stage_remaining(
     tm: TaskManager,
 ) -> None:
     await tm.create_episode(
-        SHOW, "07", {"P1": "0-8", "P2": "8-16", "P3": "16-END"}
+        SHOW, "07", 3
     )
-    await tm.claim_task(SHOW, "07", "翻译", "P1", user_qq=100)
-    outcome = await tm.complete_task(SHOW, "07", "翻译", "P1", user_qq=100)
+    await tm.claim_task(SHOW, "07", "翻译", "1", user_qq=100)
+    outcome = await tm.complete_task(SHOW, "07", "翻译", "1", user_qq=100)
     # 翻译 P2 / P3 还没做 → remaining 2
     assert outcome.same_stage_remaining == 2
     assert outcome.newly_unlocked_stages == []  # 翻译还没全完 → 校对没解锁
@@ -344,35 +361,35 @@ async def test_complete_task_unlocks_downstream_only_when_all_predecessors_done(
     tm: TaskManager,
 ) -> None:
     """翻译3段 + 时轴3段都做完 → 校对解锁；只完成翻译不解锁。"""
-    await tm.create_episode(SHOW, "07", {"P1": "0-8"})
+    await tm.create_episode(SHOW, "07", 1)
     # 翻译P1完成
-    await tm.claim_task(SHOW, "07", "翻译", "P1", user_qq=100)
-    o1 = await tm.complete_task(SHOW, "07", "翻译", "P1", user_qq=100)
+    await tm.claim_task(SHOW, "07", "翻译", "1", user_qq=100)
+    o1 = await tm.complete_task(SHOW, "07", "翻译", "1", user_qq=100)
     # 翻译全做完了（只有 P1） → 但时轴没动 → 校对仍阻塞
     assert "校对" not in o1.newly_unlocked_stages
     assert "校对" in o1.blocking_stages
 
     # 时轴P1完成
-    await tm.claim_task(SHOW, "07", "时轴", "P1", user_qq=200)
-    o2 = await tm.complete_task(SHOW, "07", "时轴", "P1", user_qq=200)
+    await tm.claim_task(SHOW, "07", "时轴", "1", user_qq=200)
+    o2 = await tm.complete_task(SHOW, "07", "时轴", "1", user_qq=200)
     # 现在所有前置完成 → 校对应解锁
     assert "校对" in o2.newly_unlocked_stages
 
 
 async def test_complete_task_wrong_state_raises(tm: TaskManager) -> None:
-    await tm.create_episode(SHOW, "07", {"P1": "0-8"})
+    await tm.create_episode(SHOW, "07", 1)
     # 没接就完成
     with pytest.raises(TaskNotAssignedError):
-        await tm.complete_task(SHOW, "07", "翻译", "P1", user_qq=100)
+        await tm.complete_task(SHOW, "07", "翻译", "1", user_qq=100)
 
 
 # ============================================================ abandon
 
 
 async def test_abandon_clears_assignee(tm: TaskManager) -> None:
-    await tm.create_episode(SHOW, "07", {"P1": "0-8"})
-    await tm.claim_task(SHOW, "07", "翻译", "P1", user_qq=100)
-    outcome = await tm.abandon_task(SHOW, "07", "翻译", "P1", user_qq=100)
+    await tm.create_episode(SHOW, "07", 1)
+    await tm.claim_task(SHOW, "07", "翻译", "1", user_qq=100)
+    outcome = await tm.abandon_task(SHOW, "07", "翻译", "1", user_qq=100)
     assert outcome.task.values[COL_PROGRESS] == PROGRESS_UNASSIGNED
     assert outcome.task.values[COL_ASSIGNEE] == ""
     assert outcome.sender_was_assignee
@@ -381,40 +398,40 @@ async def test_abandon_clears_assignee(tm: TaskManager) -> None:
 async def test_abandon_by_non_assignee_works_with_warning_flag(
     tm: TaskManager,
 ) -> None:
-    await tm.create_episode(SHOW, "07", {"P1": "0-8"})
-    await tm.claim_task(SHOW, "07", "翻译", "P1", user_qq=100)
-    outcome = await tm.abandon_task(SHOW, "07", "翻译", "P1", user_qq=999)
+    await tm.create_episode(SHOW, "07", 1)
+    await tm.claim_task(SHOW, "07", "翻译", "1", user_qq=100)
+    outcome = await tm.abandon_task(SHOW, "07", "翻译", "1", user_qq=999)
     assert outcome.sender_was_assignee is False
     assert outcome.original_assignee_raw == "100"
 
 
 async def test_abandon_unassigned_task_raises(tm: TaskManager) -> None:
-    await tm.create_episode(SHOW, "07", {"P1": "0-8"})
+    await tm.create_episode(SHOW, "07", 1)
     with pytest.raises(TaskNotAssignedError):
-        await tm.abandon_task(SHOW, "07", "翻译", "P1", user_qq=100)
+        await tm.abandon_task(SHOW, "07", "翻译", "1", user_qq=100)
 
 
 # ============================================================ set_in_progress
 
 
 async def test_set_in_progress_transitions(tm: TaskManager) -> None:
-    await tm.create_episode(SHOW, "07", {"P1": "0-8"})
-    await tm.claim_task(SHOW, "07", "翻译", "P1", user_qq=100)
-    outcome = await tm.set_in_progress(SHOW, "07", "翻译", "P1", user_qq=100)
+    await tm.create_episode(SHOW, "07", 1)
+    await tm.claim_task(SHOW, "07", "翻译", "1", user_qq=100)
+    outcome = await tm.set_in_progress(SHOW, "07", "翻译", "1", user_qq=100)
     assert outcome.task.values[COL_PROGRESS] == PROGRESS_IN_PROGRESS
 
 
 async def test_set_in_progress_from_wrong_state_raises(tm: TaskManager) -> None:
-    await tm.create_episode(SHOW, "07", {"P1": "0-8"})
+    await tm.create_episode(SHOW, "07", 1)
     with pytest.raises(TaskNotAssignedError):  # 未分配状态
-        await tm.set_in_progress(SHOW, "07", "翻译", "P1", user_qq=100)
+        await tm.set_in_progress(SHOW, "07", "翻译", "1", user_qq=100)
 
 
 # ============================================================ delete with confirmation (D7)
 
 
 async def test_prepare_then_confirm_deletes_records(tm: TaskManager) -> None:
-    await tm.create_episode(SHOW, "07", {"P1": "0-8"})
+    await tm.create_episode(SHOW, "07", 1)
     summary = tm.prepare_delete(
         group_id=ALIAS_GROUP, user_qq=987, show=SHOW, episode="07"
     )
@@ -427,7 +444,7 @@ async def test_prepare_then_confirm_deletes_records(tm: TaskManager) -> None:
 
 
 async def test_prepare_delete_with_stage_filter(tm: TaskManager) -> None:
-    await tm.create_episode(SHOW, "07", {"P1": "0-8", "P2": "8-16"})
+    await tm.create_episode(SHOW, "07", 2)
     summary = tm.prepare_delete(
         group_id=ALIAS_GROUP, user_qq=987, show=SHOW, episode="07", stage="翻译"
     )
@@ -448,7 +465,7 @@ async def test_confirm_without_pending_raises(tm: TaskManager) -> None:
 
 async def test_confirm_after_timeout_raises(tm: TaskManager) -> None:
     """D7：用注入 clock 测懒过期。"""
-    await tm.create_episode(SHOW, "07", {"P1": "0-8"})
+    await tm.create_episode(SHOW, "07", 1)
     base_time = datetime(2026, 5, 26, 18, 0, 0)
     tm._clock = lambda: base_time
     tm.prepare_delete(
@@ -463,8 +480,8 @@ async def test_confirm_after_timeout_raises(tm: TaskManager) -> None:
 
 
 async def test_second_prepare_overwrites_first(tm: TaskManager) -> None:
-    await tm.create_episode(SHOW, "07", {"P1": "0-8"})
-    await tm.create_episode(SHOW, "08", {"P1": "0-8"})
+    await tm.create_episode(SHOW, "07", 1)
+    await tm.create_episode(SHOW, "08", 1)
     s1 = tm.prepare_delete(
         group_id=ALIAS_GROUP, user_qq=987, show=SHOW, episode="07"
     )
@@ -481,7 +498,7 @@ async def test_second_prepare_overwrites_first(tm: TaskManager) -> None:
 
 
 async def test_pending_isolated_per_user_and_group(tm: TaskManager) -> None:
-    await tm.create_episode(SHOW, "07", {"P1": "0-8"})
+    await tm.create_episode(SHOW, "07", 1)
     tm.prepare_delete(
         group_id=ALIAS_GROUP, user_qq=987, show=SHOW, episode="07"
     )
@@ -491,7 +508,7 @@ async def test_pending_isolated_per_user_and_group(tm: TaskManager) -> None:
 
 
 async def test_full_episode_delete_clears_snapshot(tm: TaskManager, setup) -> None:
-    await tm.create_episode(SHOW, "07", {"P1": "0-8"})
+    await tm.create_episode(SHOW, "07", 1)
     assert setup["pipelines"].has_snapshot(SHOW, "07")
     tm.prepare_delete(
         group_id=ALIAS_GROUP, user_qq=987, show=SHOW, episode="07"
@@ -504,9 +521,9 @@ async def test_full_episode_delete_clears_snapshot(tm: TaskManager, setup) -> No
 
 
 async def test_archive_only_done_tasks(tm: TaskManager) -> None:
-    await tm.create_episode(SHOW, "07", {"P1": "0-8"})
-    await tm.claim_task(SHOW, "07", "翻译", "P1", user_qq=100)
-    await tm.complete_task(SHOW, "07", "翻译", "P1", user_qq=100)
+    await tm.create_episode(SHOW, "07", 1)
+    await tm.claim_task(SHOW, "07", "翻译", "1", user_qq=100)
+    await tm.complete_task(SHOW, "07", "翻译", "1", user_qq=100)
     outcome = await tm.archive_episode(SHOW, "07")
     assert len(outcome.archived) == 1
     assert outcome.archived[0].values[COL_TYPE] == "翻译"
@@ -524,10 +541,10 @@ async def test_archive_nonexistent_episode_raises(tm: TaskManager) -> None:
 
 
 async def test_list_my_tasks_returns_active_only(tm: TaskManager) -> None:
-    await tm.create_episode(SHOW, "07", {"P1": "0-8"})
-    await tm.claim_task(SHOW, "07", "翻译", "P1", user_qq=100)
-    await tm.claim_task(SHOW, "07", "时轴", "P1", user_qq=100)
-    await tm.complete_task(SHOW, "07", "时轴", "P1", user_qq=100)
+    await tm.create_episode(SHOW, "07", 1)
+    await tm.claim_task(SHOW, "07", "翻译", "1", user_qq=100)
+    await tm.claim_task(SHOW, "07", "时轴", "1", user_qq=100)
+    await tm.complete_task(SHOW, "07", "时轴", "1", user_qq=100)
     mine = tm.list_my_tasks(100)
     # 1 个未完成（翻译P1），时轴P1 已完成被过滤掉
     assert len(mine) == 1
@@ -537,7 +554,7 @@ async def test_list_my_tasks_returns_active_only(tm: TaskManager) -> None:
 
 
 async def test_list_available_filters_blocked_stages(tm: TaskManager) -> None:
-    await tm.create_episode(SHOW, "07", {"P1": "0-8"})
+    await tm.create_episode(SHOW, "07", 1)
     avail = tm.list_available()
     # 只有「翻译P1」和「时轴P1」可接（其他工序前置未满足）
     types = {rec.values[COL_TYPE] for _, rec in avail}
@@ -548,9 +565,9 @@ async def test_list_available_filters_blocked_stages(tm: TaskManager) -> None:
 
 
 async def test_update_task_changes_arbitrary_field(tm: TaskManager) -> None:
-    await tm.create_episode(SHOW, "07", {"P1": "0-8"})
+    await tm.create_episode(SHOW, "07", 1)
     outcome = await tm.update_task(
-        SHOW, "07", "翻译", "P1", {COL_REMARK: "加急"}
+        SHOW, "07", "翻译", "1", {COL_REMARK: "加急"}
     )
     assert outcome.task.values[COL_REMARK] == "加急"
     assert outcome.changed_fields == {COL_REMARK: "加急"}
