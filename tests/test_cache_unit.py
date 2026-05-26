@@ -50,7 +50,11 @@ class FakeStorage(StorageBackend):
         self, file_id: str, sheet_id: str, record_id: str
     ) -> Record | None:
         self.calls.append(("get_record", (file_id, sheet_id, record_id)))
-        return self.records.get((file_id, sheet_id), {}).get(record_id)
+        existing = self.records.get((file_id, sheet_id), {}).get(record_id)
+        if existing is None:
+            return None
+        # 模拟真实 storage 每次都返回新 Record，避免上层意外共享可变状态
+        return Record(record_id=existing.record_id, values=dict(existing.values))
 
     async def add_records(
         self, file_id: str, sheet_id: str, rows: list[dict[str, Any]]
@@ -78,7 +82,10 @@ class FakeStorage(StorageBackend):
         existing = sheet.get(record_id)
         if existing is None:
             raise RecordNotFoundError(record_id)
-        existing.values.update(values)
+        # 模拟真实 storage 的语义：不原地改老 Record，而是替换成新对象
+        merged = dict(existing.values)
+        merged.update(values)
+        sheet[record_id] = Record(record_id=record_id, values=merged)
         # mimic sparse response (only updated fields)
         return Record(record_id=record_id, values=dict(values))
 
