@@ -9,8 +9,6 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Iterable
 
-from nonebot.adapters.onebot.v11 import Message, MessageSegment
-
 from .models import BindingEntry, Pipeline, Record
 from .pipeline import to_dsl
 from .task_manager import (
@@ -55,11 +53,11 @@ from .task_manager import (
 # ============================================================ low-level helpers
 
 
-def assignee_segment(raw: str | None) -> MessageSegment:
-    """组员字段 → MessageSegment。纯数字 QQ → @；其他 → 文本。"""
+def assignee_segment(raw: str | None) -> str:
+    """组员字段 → 文本。纯数字 QQ → @QQ号；其他 → 文本。"""
     if raw and str(raw).isdigit():
-        return MessageSegment.at(int(raw))
-    return MessageSegment.text(raw or "?")
+        return f"[CQ:at,qq={raw}]"
+    return raw or "?"
 
 
 def _episode_label(episode: str) -> str:

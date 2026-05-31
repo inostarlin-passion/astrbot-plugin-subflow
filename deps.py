@@ -21,9 +21,15 @@ from .storage import TencentDocStorage
 from .task_manager import TaskManager
 from .token import TokenCheck, TokenStatus, check_token_status
 
-
 log = logging.getLogger(__name__)
 
+# AstrBot 端的主动推送回调
+_on_send_group_msg: callable | None = None
+
+def set_send_group_msg_handler(handler):
+    """由 main.py 在初始化时注册，用于发送群消息"""
+    global _on_send_group_msg
+    _on_send_group_msg = handler
 
 config: Config | None = None
 storage: TencentDocStorage | None = None
@@ -152,12 +158,14 @@ async def _on_sync_changes(diffs: dict[tuple[str, str], SheetDiff]) -> None:
     if bindings is None or task_manager is None:
         return
     try:
-        from nonebot import get_bot
-
-        bot = get_bot()
-    except Exception:  # noqa: BLE001
-        log.warning("外部变更提醒：当前无可用 bot 连接，跳过本轮推送")
+    if _on_send_group_msg is None:
+        log.warning("外部变更提醒：未注册发送回调，跳过本轮推送")
         return
+    send_func = _on_send_group_msg
+except Exception:
+    log.warning("外部变更提醒：未注册发送回调，跳过本轮推送")
+    return
+
 
     threshold = config.subflow_external_change_digest_threshold
     for (file_id, sheet_id), diff in diffs.items():
@@ -172,7 +180,7 @@ async def _on_sync_changes(diffs: dict[tuple[str, str], SheetDiff]) -> None:
                 report, digest_threshold=threshold
             )
             for msg in messages:
-                await bot.send_group_msg(group_id=entry.group_id, message=msg)
+                await send_func(group_id=entry.group_id, message=msg)
         except Exception:  # noqa: BLE001
             log.exception("外部变更提醒推送失败：%s", entry.alias)
 

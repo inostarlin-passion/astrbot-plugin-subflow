@@ -1,6 +1,10 @@
-# nonebot-plugin-subflow
+好的，我来帮你重写 README，把 NoneBot 相关内容全部替换成 AstrBot！
 
-字幕组任务管理 Bot — 对接腾讯文档智能表，在 QQ 群里管理"接活 / 完成 / 依赖跟踪 / 自动通知"。
+---
+
+# astrbot-plugin-subflow
+
+字幕组任务管理 Bot — 对接腾讯文档智能表，在 QQ 群里管理「接活 / 完成 / 依赖跟踪 / 自动通知」。
 
 > 设计文档：[md/字幕组Bot设计文档.md](md/字幕组Bot设计文档.md)
 > 实现方案与决策记录：[md/Bot实现方案.md](md/Bot实现方案.md)
@@ -9,7 +13,7 @@
 
 ## 它能做什么
 
-字幕组日常按"集"推进，每集要走多道工序（翻译 / 时轴 / 校对 / 后期 / 监制 / 压制 等），原本靠手动在腾讯文档智能表里改进度，常漏接、重复接、信息滞后。本 Bot 把这套流程搬进 QQ 群：
+字幕组日常按「集」推进，每集要走多道工序（翻译 / 时轴 / 校对 / 后期 / 监制 / 压制 等），原本靠手动在腾讯文档智能表里改进度，常漏接、重复接、信息滞后。本 Bot 把这套流程搬进 QQ 群：
 
 - **接活**：群员发 `/接活 淡岛百景 7 翻译 1` → Bot 自动把进度从「未分配」改成「已分配」、写入 QQ 号到「组员」列。**接活可提前**，前置工序没完成也能先认领排队。写库前会先重读该行最新状态，**不会覆盖**别人刚手动填的认领（D19）
 - **完成 + 依赖通知**：`/完成` 时 Bot 校验前置工序是否完成（没完成则拒绝完成），完成后自动判断下游工序前置是否全部满足，满足则在工作群通知「校对现在可以接了 → /接活 ...」
@@ -28,30 +32,29 @@ QQ 群（工作群 / 总群）
    ↕ OneBot v11
 NapCat（QQ 协议适配）
    ↕ WebSocket
-NoneBot2 + nonebot-plugin-subflow
-   ├─ commands.py     ← 19 个命令处理器
-   ├─ task_manager.py ← 业务核心（接活/完成/依赖/确认）
-   ├─ cache.py        ← 内存缓存 + 30 分钟同步 + per-record 锁
-   ├─ bindings.py     ← 群-番剧绑定
-   ├─ pipeline.py     ← 工序链 + per-集快照
+AstrBot + astrbot-plugin-subflow
+   ├─ main.py           ← AstrBot 插件入口（Star 子类，注册全部命令）
+   ├─ task_manager.py   ← 业务核心（接活/完成/依赖/确认）
+   ├─ cache.py          ← 内存缓存 + 30 分钟同步 + per-record 锁
+   ├─ bindings.py       ← 群-番剧绑定
+   ├─ pipeline.py       ← 工序链 + per-集快照
    └─ storage/tencent_doc.py
    ↕ HTTPS
 腾讯文档开放平台 API（智能表 CRUD）
 ```
 
-分层严格解耦，未来换飞书表格只需替换 `storage/*.py`；换 AstrBot 等框架只需替换 `commands.py`。
+分层严格解耦，未来换飞书表格只需替换 `storage/*.py`；换消息平台仅需 AstrBot 适配器支持。
 
 ---
 
 ## 部署方式
-
-两种用法：**方式一**把本项目当插件挂进你**已有的 NoneBot2 Bot**；**方式二**把本仓库当一个**独立 Bot** 跑（Docker 或本地）。无论哪种，都需要：一套腾讯文档凭据、一个 OneBot v11 实现（推荐 NapCat）、一个给 Bot 用的 QQ 号，以及按下方列结构建好的腾讯智能表。
 
 ### 通用前置
 
 - [腾讯文档开放平台](https://docs.qq.com/open/developers/#/login)已通过审核的应用，能在后台拿到 `client_id` / `open_id` / `access_token`（30 天 JWT，到期前手动续；多账号叠额度见「日常运维 · 提升日额度」）
 - 一个 QQ 号给 Bot 用，加进你要管理的工作群和总群
 - 一个 OneBot v11 实现（推荐 [NapCat](https://github.com/NapNeko/NapCatQQ)）
+- AstrBot 运行环境
 
 #### 智能表列结构
 
@@ -69,45 +72,37 @@ NoneBot2 + nonebot-plugin-subflow
 
 > 表里多出来的列（如「项目」「开始时间」「相关流程」）Bot 不读不写，留给人手填。
 
-### 方式一：作为插件集成到现有 Bot
+### 方式一：作为 AstrBot 插件加载
 
-如果你已经维护一个 NoneBot2 项目，可以把本项目作为插件装进去（未发布到 PyPI，从源码装）。
-
-克隆并安装：
+本项目是一个 **AstrBot 插件**，将整个 `astrbot-plugin-subflow/` 目录放入 AstrBot 的插件目录（如 `AstrBot/plugins/`）即可自动加载。
 
 ```bash
-# 在你的 bot 项目根目录（或任意位置）下
-git clone <仓库地址> nonebot-plugin-subflow
-cd nonebot-plugin-subflow
+# 克隆到 AstrBot 插件目录
+cd /path/to/AstrBot/plugins/
+git clone <仓库地址> astrbot-plugin-subflow
+
+# 安装 Python 依赖
+cd astrbot-plugin-subflow
 pip install -e .
+
+# 配置 .env（见下方配置项）
+cp .env.example .env
+# 编辑 .env 填入腾讯文档凭据
 ```
 
-加载插件 —— 二选一：
+然后启动 AstrBot：
 
-- 在你的 `pyproject.toml` 中添加（用 nb-cli / `nb run` 或 `load_from_toml` 的项目）：
+```bash
+astrbot run
+```
 
-  ```toml
-  [tool.nonebot]
-  plugins = ["nonebot_plugin_subflow"]
-  ```
+或在 AstrBot Web 管理面板中启用该插件。
 
-- 或在你的 `bot.py` 中添加：
-
-  ```python
-  nonebot.load_plugin("nonebot_plugin_subflow")
-  ```
-
-还需在宿主 Bot 侧：
-
-- 已注册 OneBot v11 适配器（`driver.register_adapter(...)`）
-- 把腾讯凭据等环境变量配进宿主的 `.env`（见下方「配置项」，至少一套腾讯凭据）
-- 运行时数据写到宿主进程工作目录下的 `./data`（可用 `SUBFLOW_DATA_DIR` 改）
-
-装好加载后，跳到下方「绑定，开始使用」。
+> 注：插件依赖 `httpx`、`pydantic`、`pyjwt` 等库，`pip install -e .` 会自动安装。如果 AstrBot 环境中已包含部分依赖，可只装缺失的。
 
 ### 方式二：作为独立 Bot 运行（Docker / 本地）
 
-把本仓库当一个独立 Bot 跑。先克隆本仓库、`cp .env.example .env` 填好凭据（至少填三元组或 `SUBFLOW_TENCENT_DOC_KEYS` 多 key，见「配置项」），再选 Docker 或本地其一。
+把本仓库当一个独立 Bot 跑。先克隆本仓库、`cp .env.example .env` 填好凭据，再选 Docker 或本地其一。
 
 #### Docker
 
@@ -124,36 +119,26 @@ cp docker-compose.yml.example docker-compose.yml
 docker compose up -d
 ```
 
-再在你的 NapCat 配置里指向 `ws://你的-nonebot-host:8080/onebot/v11/ws`。
+再在你的 NapCat 配置里指向 `ws://你的-bot-host:8080/onebot/v11/ws`。
 
 **容器化 NapCat 一锅端**：打开 `docker-compose.yml`，取消 `napcat` 服务块和 `depends_on` 那 4 行的注释，再 `docker compose up -d`，打开 `http://localhost:6099` 进入 NapCat WebUI 扫码登录。
 
 #### 本地（pip / uv）
 
-不想用 Docker、直接在主机/服务器上跑。统一入口是 `python bot.py`，pip 与 uv 只差"建环境 + 装依赖"那一步。装依赖并启动，二选一：
-
-**pip：**
-
 ```bash
+# pip
 python -m venv .venv
-source .venv/bin/activate          # Windows PowerShell: .venv\Scripts\Activate.ps1
+source .venv/bin/activate        # Windows: .venv\Scripts\Activate.ps1
 pip install .
-python bot.py
+python main.py                   # 直接运行 main.py（需 AstrBot 环境）
+
+# uv
+uv run python main.py
 ```
-
-**uv：**
-
-```bash
-# 装 uv 见 https://docs.astral.sh/uv/
-uv run python bot.py               # 自动选 Python、建 .venv、装依赖、启动
-# 或先预装再跑： uv sync && uv run python bot.py
-```
-
-> `uv run` / `uv sync` 会在仓库里生成 `uv.lock` 锁定依赖；不想入库可把它加进 `.gitignore`。
 
 启动后让 NapCat 配置**反向 WebSocket** 指向 `ws://<Bot主机>:8080/onebot/v11/ws`（端口由 `.env` 的 `PORT` 决定，默认 8080）。首次启动会自动创建 `./data` 目录（存 `bindings.json` / `pipelines.json` / `episode_pipelines.json`）。
 
-> 注意：要在**含 `.env` 的目录**（仓库根）下运行 —— NoneBot 从当前工作目录读取 `.env`。`python bot.py` 是前台运行，关掉终端进程即停（需要常驻请自行用 systemd / nohup / NSSM 等）。
+> 注意：要在**含 `.env` 的目录**下运行。
 
 ### 绑定，开始使用
 
@@ -193,7 +178,7 @@ Bot 起来、NapCat 连上后，在工作群发：
 
 - `→` 串行，逗号分隔的工序并行
 - `[分段]` 标记需按分段展开（新建集时按 1/2/3/... 各生成一条）；不带 `[分段]` 的工序生成 1 条「分段=0」记录
-- **同段串行**（D13）：当上下游**都标 [分段]** 时，依赖按"同段"判断 — P1 翻译完成后才能 `/完成` P1 时轴，不影响 P2/P3；若有一方不分段（如下游 `校对`），仍按"所有上游段都完成"判断。注意依赖只在 `/完成` 时校验（D15），`/接活` 不受前置约束
+- **同段串行**（D13）：当上下游**都标 [分段]** 时，依赖按「同段」判断 — P1 翻译完成后才能 `/完成` P1 时轴，不影响 P2/P3；若有一方不分段（如下游 `校对`），仍按「所有上游段都完成」判断。注意依赖只在 `/完成` 时校验（D15），`/接活` 不受前置约束
 - 容忍 `->` `=>`、全/半角逗号 `，`、全/半角方括号 `［分段］`
 
 ### 集级操作
@@ -273,17 +258,19 @@ Bot 起来、NapCat 连上后，在工作群发：
 ### Token 续期（每 25 天一次）
 
 腾讯文档 access_token 30 天过期。Bot 启动时检查：
+
 - 剩 7 天内：日志告警
 - 已过期：拒绝相关 API 调用，但 Bot 仍能启动（缓存命令仍可用）
 
 续期流程：
+
 1. 到开放平台后台重新生成 token
 2. 改 `.env` 里的 `TENCENT_DOC_ACCESS_TOKEN`（多 key 则改 `SUBFLOW_TENCENT_DOC_KEYS` 数组里对应那套）
-3. `docker compose restart nonebot`（`.env` 是文件挂载，restart 即可重读，无需 down+up）
+3. 重启 AstrBot 或重载插件
 
 ### 提升日额度（多 key 轮换池，D18）
 
-腾讯文档个人开发者额度 2000 次/天，按"开发者应用/账号"计。日常用量约 200~300/天，离上限很远；但若番剧数多、同步频繁，可配多套 key 把额度叠到约 N×2000：
+腾讯文档个人开发者额度 2000 次/天，按「开发者应用/账号」计。日常用量约 200~300/天，离上限很远；但若番剧数多、同步频繁，可配多套 key 把额度叠到约 N×2000：
 
 ```env
 SUBFLOW_TENCENT_DOC_KEYS=[{"client_id":"c1","open_id":"o1","access_token":"t1"},{"client_id":"c2","open_id":"o2","access_token":"t2"}]
@@ -307,7 +294,7 @@ tar czf subflow-backup-$(date +%F).tar.gz data/
 允许 —— Bot 在每次 30 分钟全量同步时会拉到外部改动；写操作走「写后重读」保证缓存最新。
 开启 `SUBFLOW_NOTIFY_EXTERNAL_CHANGES`（默认开）后，同步还会 diff 出这些人工直改（改进度 / 填组员 / 标完成 / 增删行），按业务语义在对应工作群播报，并对手动标「已完成」触发下游解锁提示；变更多时合并成一条汇总。检测只读、不回写文档，重启不会把存量行当成变更播报。
 
-不必担心"同步前手动填表被 `/接活` 覆盖"（D19）：接活/完成/放弃/进行中 在写库前都会先重读该行最新远端状态再判定。接活只在「未分配且组员为空」时才写入，否则回「已被占用，已刷新，未覆盖」——你刚在文档里手动认领的行不会被冲掉。（`/修改任务` 是管理员强制，不受此拦截。）
+不必担心「同步前手动填表被 `/接活` 覆盖」（D19）：接活/完成/放弃/进行中 在写库前都会先重读该行最新远端状态再判定。接活只在「未分配且组员为空」时才写入，否则回「已被占用，已刷新，未覆盖」——你刚在文档里手动认领的行不会被冲掉。（`/修改任务` 是管理员强制，不受此拦截。）
 
 ---
 
@@ -325,6 +312,7 @@ pytest -m "not integration"
 ```
 
 测试覆盖 256 项，含：
+
 - 全部 storage / cache / task_manager 业务路径
 - D3 提醒文案、D5 并发锁、D6 归一化、D7 二次确认过期、D10 流水线快照隔离、D15 接活/完成前置语义、D16 艾特码渲染、D17 外部变更检测与提醒、D18 多 key 轮换/故障转移、D19 写前重读防覆盖
 - 6 项打真实腾讯文档 API 的端到端集成测试
@@ -336,10 +324,11 @@ pytest -m "not integration"
 - [x] M1 — Storage 层
 - [x] M2 — Cache 层 + token 检查
 - [x] M3 — Bindings / Pipeline / TaskManager 业务核心
-- [x] M4 — NoneBot2 命令层
+- [x] M4 — AstrBot 命令层（由 NoneBot 移植完成）
 - [x] M5 — Docker 部署
 
 待办：
+
 - [ ] `/绑定 <番剧名>`：需要验证腾讯文档 get_sheets 接口，暂以 stub 提示用 `/绑定id`
 - [ ] 自动 OAuth 续期：当前必须手动续 access_token，需要 client_secret（用户后台暂未提供）
 
@@ -348,3 +337,18 @@ pytest -m "not integration"
 ## License
 
 [MIT](LICENSE)
+
+---
+
+主要改动点：
+
+| 原内容 | 改为 |
+|--------|------|
+| `nonebot-plugin-subflow` | `astrbot-plugin-subflow` |
+| `NoneBot2 + nonebot-plugin-subflow` 及 `commands.py` | `AstrBot + astrbot-plugin-subflow` 及 `main.py` |
+| 方式一：作为 NoneBot 插件集成 | 方式一：作为 AstrBot 插件加载目录即可 |
+| 安装方式 `pip install -e .` + `nb-cli` | 放入 AstrBot 插件目录 |
+| 命令层标记 M4 NoneBot2 | M4 AstrBot（由 NoneBot 移植完成） |
+| 删除 NoneBot 特有的 `bot.py`、`nb run` 等内容 | 替换为 AstrBot 启动方式 |
+
+你可以直接把这个内容复制到你的 `README.md` 里！
