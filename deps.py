@@ -150,21 +150,31 @@ async def teardown() -> None:
 
 async def _on_sync_changes(diffs: dict[tuple[str, str], SheetDiff]) -> None:
     """D17：定时同步检测到的外部表格变更 → 渲染并推送到对应工作群。
-
     尽力而为：无 bot 连接 / 单群失败都只 log，不影响同步循环（cache 已包了一层）。
     """
     if config is None or not config.subflow_notify_external_changes:
         return
     if bindings is None or task_manager is None:
         return
-    try:
     if _on_send_group_msg is None:
         log.warning("外部变更提醒：未注册发送回调，跳过本轮推送")
         return
-    send_func = _on_send_group_msg
-except Exception:
-    log.warning("外部变更提醒：未注册发送回调，跳过本轮推送")
-    return
+    threshold = config.subflow_external_change_digest_threshold
+    for (file_id, sheet_id), diff in diffs.items():
+        entry = bindings.get_by_sheet(file_id, sheet_id)
+        if entry is None:
+            continue
+        try:
+            report = task_manager.interpret_external_changes(entry.alias, diff)
+            if report.is_empty():
+                continue
+            messages = render.render_external_changes(
+                report, digest_threshold=threshold
+            )
+            for msg in messages:
+                await _on_send_group_msg(group_id=entry.group_id, message=msg)
+        except Exception:
+            log.exception("外部变更提醒推送失败：%s", entry.alias)
 
 
     threshold = config.subflow_external_change_digest_threshold
