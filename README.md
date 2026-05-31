@@ -49,7 +49,7 @@ NoneBot2 + nonebot-plugin-subflow
 
 ### 通用前置
 
-- 腾讯文档开放平台已通过审核的应用，能在后台拿到 `client_id` / `open_id` / `access_token`（30 天 JWT，到期前手动续；多账号叠额度见「日常运维 · 提升日额度」）
+- [腾讯文档开放平台](https://docs.qq.com/open/developers/#/login)已通过审核的应用，能在后台拿到 `client_id` / `open_id` / `access_token`（30 天 JWT，到期前手动续；多账号叠额度见「日常运维 · 提升日额度」）
 - 一个 QQ 号给 Bot 用，加进你要管理的工作群和总群
 - 一个 OneBot v11 实现（推荐 [NapCat](https://github.com/NapNeko/NapCatQQ)）
 
