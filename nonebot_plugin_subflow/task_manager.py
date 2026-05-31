@@ -535,15 +535,19 @@ class TaskManager:
         async with self._cache.lock_for(
             binding.file_id, binding.sheet_id, record.record_id
         ):
-            current = self._cache.get_record(
+            # D19：写前单条重读最新远端态（顺带刷新缓存），避免覆盖两次同步间的手动填表
+            current = await self._cache.refresh_record(
                 binding.file_id, binding.sheet_id, record.record_id
             )
             if current is None:
-                raise TaskNotFoundError("该任务在锁内已消失")
-            if current.values.get(COL_PROGRESS) != PROGRESS_UNASSIGNED:
-                holder = current.values.get(COL_ASSIGNEE) or "?"
+                raise TaskNotFoundError("该任务已不存在（可能被手动删除）")
+            progress = current.values.get(COL_PROGRESS)
+            assignee = current.values.get(COL_ASSIGNEE) or ""
+            # 未分配 且 组员为空 才可接；否则拒绝、不覆盖（含"只填名没改状态"）
+            if progress != PROGRESS_UNASSIGNED or assignee:
+                holder = assignee or "?"
                 raise TaskAlreadyAssignedError(
-                    f"任务已被 {holder} 接走（当前状态：{current.values.get(COL_PROGRESS)}）"
+                    f"任务已被 {holder} 占用（当前「{progress}」，疑似手动填表），已刷新，未覆盖"
                 )
             # 用户配额
             if self._max_tasks_per_user > 0:
@@ -587,11 +591,12 @@ class TaskManager:
         async with self._cache.lock_for(
             binding.file_id, binding.sheet_id, record.record_id
         ):
-            current = self._cache.get_record(
+            # D19：写前单条重读最新远端态，避免对已被手改的行误判/覆盖
+            current = await self._cache.refresh_record(
                 binding.file_id, binding.sheet_id, record.record_id
             )
             if current is None:
-                raise TaskNotFoundError("该任务在锁内已消失")
+                raise TaskNotFoundError("该任务已不存在（可能被手动删除）")
             progress = current.values.get(COL_PROGRESS)
             if progress not in (PROGRESS_ASSIGNED, PROGRESS_IN_PROGRESS):
                 raise TaskNotAssignedError(
@@ -726,11 +731,12 @@ class TaskManager:
         async with self._cache.lock_for(
             binding.file_id, binding.sheet_id, record.record_id
         ):
-            current = self._cache.get_record(
+            # D19：写前单条重读最新远端态
+            current = await self._cache.refresh_record(
                 binding.file_id, binding.sheet_id, record.record_id
             )
             if current is None:
-                raise TaskNotFoundError("该任务在锁内已消失")
+                raise TaskNotFoundError("该任务已不存在（可能被手动删除）")
             progress = current.values.get(COL_PROGRESS)
             if progress not in (PROGRESS_ASSIGNED, PROGRESS_IN_PROGRESS):
                 raise TaskNotAssignedError(
@@ -772,11 +778,12 @@ class TaskManager:
         async with self._cache.lock_for(
             binding.file_id, binding.sheet_id, record.record_id
         ):
-            current = self._cache.get_record(
+            # D19：写前单条重读最新远端态
+            current = await self._cache.refresh_record(
                 binding.file_id, binding.sheet_id, record.record_id
             )
             if current is None:
-                raise TaskNotFoundError("该任务在锁内已消失")
+                raise TaskNotFoundError("该任务已不存在（可能被手动删除）")
             if current.values.get(COL_PROGRESS) != PROGRESS_ASSIGNED:
                 raise TaskNotAssignedError(
                     f"任务当前状态是「{current.values.get(COL_PROGRESS)}」，"
@@ -813,6 +820,12 @@ class TaskManager:
         async with self._cache.lock_for(
             binding.file_id, binding.sheet_id, record.record_id
         ):
+            # D19：写前重读刷新缓存（管理员强制覆盖，不因冲突拒绝）
+            current = await self._cache.refresh_record(
+                binding.file_id, binding.sheet_id, record.record_id
+            )
+            if current is None:
+                raise TaskNotFoundError("该任务已不存在（可能被手动删除）")
             updated = await self._cache.update_record(
                 binding.file_id, binding.sheet_id, record.record_id, changes
             )

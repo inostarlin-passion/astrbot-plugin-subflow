@@ -873,3 +873,90 @@ async def test_interpret_external_completion_ats_held_downstream(
     report = arrow_tm.interpret_external_changes(SHOW, diff)
     assert ("07", "时轴", "1", "200") in report.unlocked_held
     assert ("07", "时轴", "1") not in report.unlocked_unassigned
+
+
+# ============================================================ D19: 写前单条重读防覆盖
+
+
+def _remote_rid(setup, stage: str, segment: str) -> str:
+    """从缓存定位某 (stage, segment) 的 record_id（缓存=远端，刚 create 完）。"""
+    return next(
+        r.record_id
+        for r in setup["cache"].get_records("F", "S")
+        if r.values[COL_TYPE] == stage and r.values[COL_SEGMENT] == segment
+    )
+
+
+def _set_remote(setup, rid: str, **changes) -> None:
+    """绕过缓存，直接改 FakeStorage 里的远端值，模拟"手动填表后缓存陈旧"。"""
+    fake = setup["fake"]
+    old = fake.records[("F", "S")][rid].values
+    fake.records[("F", "S")][rid] = Record(
+        record_id=rid, values={**old, **changes}
+    )
+
+
+async def test_d19_claim_rejected_when_remote_already_assigned(
+    setup, tm: TaskManager
+) -> None:
+    await tm.create_episode(SHOW, "07", 1)
+    rid = _remote_rid(setup, "翻译", "1")
+    # 手动填表：远端已分配 + 组员 999，但缓存仍未分配
+    _set_remote(setup, rid, **{COL_PROGRESS: PROGRESS_ASSIGNED, COL_ASSIGNEE: "999"})
+    with pytest.raises(TaskAlreadyAssignedError):
+        await tm.claim_task(SHOW, "07", "翻译", "1", user_qq=100)
+    # 远端组员未被覆盖
+    assert setup["fake"].records[("F", "S")][rid].values[COL_ASSIGNEE] == "999"
+
+
+async def test_d19_claim_rejected_when_only_assignee_filled(
+    setup, tm: TaskManager
+) -> None:
+    """只手填了名字、进度仍未分配 → 也不覆盖。"""
+    await tm.create_episode(SHOW, "07", 1)
+    rid = _remote_rid(setup, "翻译", "1")
+    _set_remote(setup, rid, **{COL_ASSIGNEE: "小明"})  # 进度仍未分配
+    with pytest.raises(TaskAlreadyAssignedError):
+        await tm.claim_task(SHOW, "07", "翻译", "1", user_qq=100)
+    assert setup["fake"].records[("F", "S")][rid].values[COL_ASSIGNEE] == "小明"
+
+
+async def test_d19_claim_happy_path_refreshes_remote(setup, tm: TaskManager) -> None:
+    await tm.create_episode(SHOW, "07", 1)
+    outcome = await tm.claim_task(SHOW, "07", "翻译", "1", user_qq=100)
+    assert outcome.task.values[COL_ASSIGNEE] == "100"
+    # 写前确实发生了单条重读
+    assert any(c[0] == "get_record" for c in setup["fake"].calls)
+
+
+async def test_d19_complete_blocked_when_remote_done(setup, tm: TaskManager) -> None:
+    await tm.create_episode(SHOW, "07", 1)
+    await tm.claim_task(SHOW, "07", "翻译", "1", user_qq=100)
+    rid = _remote_rid(setup, "翻译", "1")
+    # 远端被手改成已完成（缓存还是已分配）
+    _set_remote(setup, rid, **{COL_PROGRESS: PROGRESS_DONE})
+    with pytest.raises(TaskNotAssignedError):
+        await tm.complete_task(SHOW, "07", "翻译", "1", user_qq=100)
+
+
+async def test_d19_abandon_blocked_when_remote_unassigned(
+    setup, tm: TaskManager
+) -> None:
+    await tm.create_episode(SHOW, "07", 1)
+    await tm.claim_task(SHOW, "07", "翻译", "1", user_qq=100)
+    rid = _remote_rid(setup, "翻译", "1")
+    # 远端被手改回未分配 + 清空组员
+    _set_remote(setup, rid, **{COL_PROGRESS: PROGRESS_UNASSIGNED, COL_ASSIGNEE: ""})
+    with pytest.raises(TaskNotAssignedError):
+        await tm.abandon_task(SHOW, "07", "翻译", "1", user_qq=100)
+
+
+async def test_d19_update_task_forces_through_after_remote_change(
+    setup, tm: TaskManager
+) -> None:
+    """/修改任务 是管理员强制：重读刷新但不因冲突拒绝。"""
+    await tm.create_episode(SHOW, "07", 1)
+    rid = _remote_rid(setup, "翻译", "1")
+    _set_remote(setup, rid, **{COL_PROGRESS: PROGRESS_DONE, COL_ASSIGNEE: "999"})
+    outcome = await tm.update_task(SHOW, "07", "翻译", "1", {COL_REMARK: "加急"})
+    assert outcome.task.values[COL_REMARK] == "加急"
