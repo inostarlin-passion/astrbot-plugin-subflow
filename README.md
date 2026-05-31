@@ -43,31 +43,17 @@ NoneBot2 + nonebot-plugin-subflow
 
 ---
 
-## 快速开始（Docker）
+## 部署方式
 
-### 0. 前置
+两种用法：**方式一**把本项目当插件挂进你**已有的 NoneBot2 Bot**；**方式二**把本仓库当一个**独立 Bot** 跑（Docker 或本地）。无论哪种，都需要：一套腾讯文档凭据、一个 OneBot v11 实现（推荐 NapCat）、一个给 Bot 用的 QQ 号，以及按下方列结构建好的腾讯智能表。
 
-- Docker / Docker Compose
-- 腾讯文档开放平台已通过审核的应用，能在后台拿到：
-  - `client_id`
-  - `open_id`
-  - `access_token`（30 天 JWT，到期前手动续）
+### 通用前置
+
+- 腾讯文档开放平台已通过审核的应用，能在后台拿到 `client_id` / `open_id` / `access_token`（30 天 JWT，到期前手动续；多账号叠额度见「日常运维 · 提升日额度」）
 - 一个 QQ 号给 Bot 用，加进你要管理的工作群和总群
 - 一个 OneBot v11 实现（推荐 [NapCat](https://github.com/NapNeko/NapCatQQ)）
 
-### 1. 准备数据
-
-复制环境变量模板：
-
-```bash
-cp .env.example .env
-cp docker-compose.yml.example docker-compose.yml
-```
-
-编辑 `.env`：至少填 `TENCENT_DOC_CLIENT_ID` / `TENCENT_DOC_OPEN_ID` / `TENCENT_DOC_ACCESS_TOKEN`（单 key），或改填 `SUBFLOW_TENCENT_DOC_KEYS` 多 key 数组（见下方「日常运维 · 提升日额度」）；其他按注释提示按需填。
-（`.env` 和 `docker-compose.yml` 都被 gitignore，本地版本随便改；upstream 模板只跟 `.example` 走。）
-
-### 2. 在腾讯文档里准备智能表
+#### 智能表列结构
 
 每个番剧建一个子表，**列结构必须包含**：
 
@@ -83,61 +69,68 @@ cp docker-compose.yml.example docker-compose.yml
 
 > 表里多出来的列（如「项目」「开始时间」「相关流程」）Bot 不读不写，留给人手填。
 
-### 3. 启动 Bot
+### 方式一：作为插件集成到现有 Bot
 
-**方案 A — 已有外部 NapCat**：
+如果你已经维护一个 NoneBot2 项目，可以把本项目作为插件装进去（未发布到 PyPI，从源码装）。
 
-```bash
-docker compose up -d
-```
-
-然后在你的 NapCat 配置里指向 `ws://你的-nonebot-host:8080/onebot/v11/ws`。
-
-**方案 B — 容器化 NapCat 一锅端**：
-
-打开 `docker-compose.yml`，取消 `napcat` 服务块和 `depends_on` 那 4 行的注释，再：
+克隆并安装：
 
 ```bash
-docker compose up -d
-```
-
-打开 `http://localhost:6099` 进入 NapCat WebUI 扫码登录。
-
-### 4. 在 QQ 群里配置
-
-进工作群发：
-
-```
-/绑定id 300000000$RdEfaprsBpFo ss_3k813b 淡岛百景
-```
-
-`300000000$RdEfaprsBpFo` 是真 fileID；如果你只有腾讯文档 URL 里的分享 ID（如 `DUmRFZmFwcnNCcEZv`），Bot 也接受 —— 会自动通过腾讯的 converter 接口换成真 fileID。`ss_3k813b` 是子表 ID，从 URL 的 `?tab=ss_xxx` 部分取。
-
-绑定后即可正常使用所有命令。
-
----
-
-## 本地部署（pip / uv）
-
-不想用 Docker、想直接在主机/服务器上跑时用这个。统一入口是 `python bot.py`，pip 和 uv 两条路只差"建环境 + 装依赖"那一步，其余完全一样。
-
-### 前置
-
-- Python ≥ 3.10
-- 一个 OneBot v11 实现（推荐 [NapCat](https://github.com/NapNeko/NapCatQQ)），与 Bot 网络可达
-- 腾讯文档凭据：单 key 填 `TENCENT_DOC_CLIENT_ID/OPEN_ID/ACCESS_TOKEN`，或多 key 填 `SUBFLOW_TENCENT_DOC_KEYS`（见上方配置项）
-
-### 1. 拉代码 + 配置
-
-```bash
+# 在你的 bot 项目根目录（或任意位置）下
 git clone <仓库地址> nonebot-plugin-subflow
 cd nonebot-plugin-subflow
-cp .env.example .env        # Windows: copy .env.example .env
+pip install -e .
 ```
 
-编辑 `.env` 填好凭据等（至少填一套腾讯凭据；NapCat 连接见第 3 步）。
+加载插件 —— 二选一：
 
-### 2. 装依赖并启动（pip 或 uv，二选一）
+- 在你的 `pyproject.toml` 中添加（用 nb-cli / `nb run` 或 `load_from_toml` 的项目）：
+
+  ```toml
+  [tool.nonebot]
+  plugins = ["nonebot_plugin_subflow"]
+  ```
+
+- 或在你的 `bot.py` 中添加：
+
+  ```python
+  nonebot.load_plugin("nonebot_plugin_subflow")
+  ```
+
+还需在宿主 Bot 侧：
+
+- 已注册 OneBot v11 适配器（`driver.register_adapter(...)`）
+- 把腾讯凭据等环境变量配进宿主的 `.env`（见下方「配置项」，至少一套腾讯凭据）
+- 运行时数据写到宿主进程工作目录下的 `./data`（可用 `SUBFLOW_DATA_DIR` 改）
+
+装好加载后，跳到下方「绑定，开始使用」。
+
+### 方式二：作为独立 Bot 运行（Docker / 本地）
+
+把本仓库当一个独立 Bot 跑。先克隆本仓库、`cp .env.example .env` 填好凭据（至少填三元组或 `SUBFLOW_TENCENT_DOC_KEYS` 多 key，见「配置项」），再选 Docker 或本地其一。
+
+#### Docker
+
+```bash
+cp .env.example .env
+cp docker-compose.yml.example docker-compose.yml
+```
+
+（`.env` 和 `docker-compose.yml` 都被 gitignore，本地版本随便改；upstream 模板只跟 `.example` 走。）然后二选一启动：
+
+**已有外部 NapCat**：
+
+```bash
+docker compose up -d
+```
+
+再在你的 NapCat 配置里指向 `ws://你的-nonebot-host:8080/onebot/v11/ws`。
+
+**容器化 NapCat 一锅端**：打开 `docker-compose.yml`，取消 `napcat` 服务块和 `depends_on` 那 4 行的注释，再 `docker compose up -d`，打开 `http://localhost:6099` 进入 NapCat WebUI 扫码登录。
+
+#### 本地（pip / uv）
+
+不想用 Docker、直接在主机/服务器上跑。统一入口是 `python bot.py`，pip 与 uv 只差"建环境 + 装依赖"那一步。装依赖并启动，二选一：
 
 **pip：**
 
@@ -158,13 +151,21 @@ uv run python bot.py               # 自动选 Python、建 .venv、装依赖、
 
 > `uv run` / `uv sync` 会在仓库里生成 `uv.lock` 锁定依赖；不想入库可把它加进 `.gitignore`。
 
-### 3. 让 NapCat 连上来
-
-在 NapCat 里配置**反向 WebSocket**指向 `ws://<Bot主机>:8080/onebot/v11/ws`（端口由 `.env` 的 `PORT` 决定，默认 8080）。
-
-首次启动后会自动创建 `./data` 目录（存 `bindings.json` / `pipelines.json` / `episode_pipelines.json`）。然后在工作群发 `/绑定id ...` 即可开始使用（同上方 Docker 第 4 步）。
+启动后让 NapCat 配置**反向 WebSocket** 指向 `ws://<Bot主机>:8080/onebot/v11/ws`（端口由 `.env` 的 `PORT` 决定，默认 8080）。首次启动会自动创建 `./data` 目录（存 `bindings.json` / `pipelines.json` / `episode_pipelines.json`）。
 
 > 注意：要在**含 `.env` 的目录**（仓库根）下运行 —— NoneBot 从当前工作目录读取 `.env`。`python bot.py` 是前台运行，关掉终端进程即停（需要常驻请自行用 systemd / nohup / NSSM 等）。
+
+### 绑定，开始使用
+
+Bot 起来、NapCat 连上后，在工作群发：
+
+```
+/绑定id 300000000$RdEfaprsBpFo ss_3k813b 淡岛百景
+```
+
+`300000000$RdEfaprsBpFo` 是真 fileID；如果你只有腾讯文档 URL 里的分享 ID（如 `DUmRFZmFwcnNCcEZv`），Bot 也接受 —— 会自动通过腾讯的 converter 接口换成真 fileID。`ss_3k813b` 是子表 ID，从 URL 的 `?tab=ss_xxx` 部分取。
+
+绑定后即可正常使用所有命令。
 
 ---
 

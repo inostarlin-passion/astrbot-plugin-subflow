@@ -756,8 +756,9 @@ CMD ["python", "-m", "nb", "run"]
 | **仅 NoneBot**（默认） | 只启动 `nonebot` 服务，连接外部已运行的 NapCat | NapCat 已在其他机器/容器上部署，或使用其他 OneBot 实现 |
 | **全量部署** | 取消 `napcat` 服务注释，一键拉起两个容器 | 全新环境，希望一条 `docker compose up -d` 搞定一切 |
 | **本地（pip / uv）** | 不用 Docker，直接在主机上建虚拟环境装依赖后 `python bot.py` | 已有 Python 环境、不想引入 Docker；pip 与 uv 仅"建环境+装依赖"一步不同 |
+| **作为插件集成** | 挂进已有的 NoneBot2 Bot：`pip install -e .` 后加载插件 `nonebot_plugin_subflow` | 已经维护别的 NoneBot2 项目，想把本功能并进去 |
 
-> 本地部署统一入口为 `python bot.py`（与 Dockerfile 一致），pip / uv 的具体命令见 [README「本地部署（pip / uv）」](../README.md#本地部署pip--uv)。NoneBot 从当前工作目录读 `.env`，需在含 `.env` 的仓库根运行。
+> 上面前三种是把本仓库当**独立 Bot** 跑（统一入口 `python bot.py`，与 Dockerfile 一致，NoneBot 从当前工作目录读 `.env`）；最后一种是把本项目当**插件**集成到宿主 Bot。各方式的具体命令见 [README「部署方式」](../README.md#部署方式)。
 
 全量部署时的启动流程：
 
