@@ -467,7 +467,11 @@ class TaskManager:
         segment: str | None,
         user_qq: int,
     ) -> ClaimOutcome:
-        """D5 锁内: 校验 进度=未分配 + 前置满足 + 用户配额 → 更新组员/进度。"""
+        """D5 锁内: 校验 进度=未分配 + 用户配额 → 更新组员/进度。
+
+        D15：接活**不再**校验前置工序——随时可提前认领；前置校验改在
+        complete_task（/完成）里做。
+        """
         binding = self._bindings.get(show)
         if binding is None:
             from .exceptions import AliasNotFoundError
@@ -489,19 +493,6 @@ class TaskManager:
                 holder = current.values.get(COL_ASSIGNEE) or "?"
                 raise TaskAlreadyAssignedError(
                     f"任务已被 {holder} 接走（当前状态：{current.values.get(COL_PROGRESS)}）"
-                )
-            # 前置工序校验（D10：用集快照；D13：传 segment 走同段依赖）
-            episode_records = self._episode_records(binding, episode)
-            pipeline = self._pipelines.get_episode_pipeline(show, episode)
-            current_segment = str(current.values.get(COL_SEGMENT) or "")
-            if not self._is_stage_unlocked(
-                pipeline, episode_records, stage, segment=current_segment
-            ):
-                blockers = self._blocking_predecessors(
-                    pipeline, episode_records, stage, segment=current_segment
-                )
-                raise PredecessorNotDoneError(
-                    f"前置任务未完成：{blockers}"
                 )
             # 用户配额
             if self._max_tasks_per_user > 0:
@@ -555,11 +546,25 @@ class TaskManager:
                 raise TaskNotAssignedError(
                     f"任务当前状态是「{progress}」，无法标记完成"
                 )
+
+            # D15：前置工序校验（从 claim 移来）——前置没全完成不能完成。
+            # D10：用集快照；D13：按本条 segment 走同段/全段依赖语义。
+            # 完成前快照：同时用来探测下游 newly unlocked。
+            pipeline = self._pipelines.get_episode_pipeline(show, episode)
+            pre_records = self._episode_records(binding, episode)
+            current_segment = str(current.values.get(COL_SEGMENT) or "")
+            if not self._is_stage_unlocked(
+                pipeline, pre_records, stage, segment=current_segment
+            ):
+                blockers = self._blocking_predecessors(
+                    pipeline, pre_records, stage, segment=current_segment
+                )
+                raise PredecessorNotDoneError(
+                    f"前置任务未完成，无法完成：{blockers}"
+                )
+
             original_assignee = str(current.values.get(COL_ASSIGNEE) or "")
             sender_is_assignee = original_assignee == str(user_qq)
-
-            # 完成前快照：用来探测 newly unlocked
-            pre_records = self._episode_records(binding, episode)
 
             updated = await self._cache.update_record(
                 binding.file_id,
@@ -572,7 +577,6 @@ class TaskManager:
             )
 
             post_records = self._episode_records(binding, episode)
-            pipeline = self._pipelines.get_episode_pipeline(show, episode)
 
             same_stage_remaining = sum(
                 1
@@ -967,29 +971,17 @@ class TaskManager:
     def list_available(
         self, show_filter: Iterable[str] | None = None
     ) -> list[tuple[str, Record]]:
-        """列出所有 进度=未分配 且前置已满足的任务。"""
+        """列出所有 进度=未分配 的任务。
+
+        D15：接活不再校验前置（可提前认领），故 /待接 直接列出全部未分配，
+        不再按前置是否满足过滤。
+        """
         out: list[tuple[str, Record]] = []
         for entry in self._bindings.list_all():
             if show_filter is not None and entry.alias not in show_filter:
                 continue
-            all_records = self._cache.get_records(entry.file_id, entry.sheet_id)
-            # 按集分组以便每集只算一次 pipeline + episode records
-            by_ep: dict[str, list[Record]] = {}
-            for rec in all_records:
-                ep = str(rec.values.get(COL_EPISODE, ""))
-                by_ep.setdefault(ep, []).append(rec)
-            for ep, ep_records in by_ep.items():
-                pipeline = self._pipelines.get_episode_pipeline(entry.alias, ep)
-                for rec in ep_records:
-                    if rec.values.get(COL_PROGRESS) != PROGRESS_UNASSIGNED:
-                        continue
-                    stage = rec.values.get(COL_TYPE)
-                    # D13：按本记录的 segment 算同段依赖
-                    seg = str(rec.values.get(COL_SEGMENT) or "")
-                    if not self._is_stage_unlocked(
-                        pipeline, ep_records, stage, segment=seg
-                    ):
-                        continue
+            for rec in self._cache.get_records(entry.file_id, entry.sheet_id):
+                if rec.values.get(COL_PROGRESS) == PROGRESS_UNASSIGNED:
                     out.append((entry.alias, rec))
         return out
 

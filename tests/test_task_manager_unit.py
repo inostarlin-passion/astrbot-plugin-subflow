@@ -217,19 +217,27 @@ async def test_create_special_empty_stages_raises(tm: TaskManager) -> None:
         await tm.create_special(SHOW, "OP", [])
 
 
-async def test_create_special_compress_cannot_be_claimed_until_proof(
+async def test_create_special_compress_cannot_be_completed_until_proof(
     tm: TaskManager,
 ) -> None:
-    """传递闭包效果：OP=[翻译, 时轴, 校对, 压制]，没完校对前压制不能接。"""
+    """传递闭包效果：OP=[翻译, 时轴, 校对, 压制]。
+
+    D15：压制可提前接，但没完校对前不能完成。
+    """
     await tm.create_special(SHOW, "OP", ["翻译", "时轴", "校对", "压制"])
+    # D15：前置没完成也能接
+    claimed = await tm.claim_task(SHOW, "OP", "压制", None, user_qq=100)
+    assert claimed.task.values[COL_TYPE] == "压制"
+    # 但前置没完成不能完成
     with pytest.raises(PredecessorNotDoneError):
-        await tm.claim_task(SHOW, "OP", "压制", None, user_qq=100)
-    # 把上游 3 个全完成后，压制才能接
+        await tm.complete_task(SHOW, "OP", "压制", None, user_qq=100)
+    # 把上游 3 个全完成后，压制才能完成
     for stage in ("翻译", "时轴", "校对"):
         await tm.claim_task(SHOW, "OP", stage, None, user_qq=100)
         await tm.complete_task(SHOW, "OP", stage, None, user_qq=100)
-    outcome = await tm.claim_task(SHOW, "OP", "压制", None, user_qq=100)
+    outcome = await tm.complete_task(SHOW, "OP", "压制", None, user_qq=100)
     assert outcome.task.values[COL_TYPE] == "压制"
+    assert outcome.task.values[COL_PROGRESS] == PROGRESS_DONE
 
 
 # ============================================================ claim_task
@@ -260,11 +268,12 @@ async def test_claim_task_already_assigned_raises(tm: TaskManager) -> None:
         await tm.claim_task(SHOW, "07", "翻译", "1", user_qq=200)
 
 
-async def test_claim_task_predecessor_not_done_raises(tm: TaskManager) -> None:
+async def test_claim_task_predecessor_not_done_succeeds(tm: TaskManager) -> None:
+    """D15：校对依赖 翻译+时轴 都没完成，但接活仍应成功（可提前认领）。"""
     await tm.create_episode(SHOW, "07", 1)
-    # 校对 依赖 翻译 + 时轴，都没完成
-    with pytest.raises(PredecessorNotDoneError):
-        await tm.claim_task(SHOW, "07", "校对", None, user_qq=100)
+    outcome = await tm.claim_task(SHOW, "07", "校对", None, user_qq=100)
+    assert outcome.task.values[COL_TYPE] == "校对"
+    assert outcome.task.values[COL_PROGRESS] == PROGRESS_ASSIGNED
 
 
 async def test_claim_task_unknown_segment_raises(tm: TaskManager) -> None:
@@ -381,6 +390,22 @@ async def test_complete_task_wrong_state_raises(tm: TaskManager) -> None:
     # 没接就完成
     with pytest.raises(TaskNotAssignedError):
         await tm.complete_task(SHOW, "07", "翻译", "1", user_qq=100)
+
+
+async def test_complete_task_predecessor_not_done_raises(tm: TaskManager) -> None:
+    """D15：前置没全完成时，已接的下游任务也不能完成。"""
+    await tm.create_episode(SHOW, "07", 1)
+    # 校对依赖 翻译+时轴，提前接下来（D15 允许）
+    await tm.claim_task(SHOW, "07", "校对", None, user_qq=100)
+    # 翻译/时轴都没完成 → 校对不能完成
+    with pytest.raises(PredecessorNotDoneError):
+        await tm.complete_task(SHOW, "07", "校对", None, user_qq=100)
+    # 把前置都完成后，校对才能完成
+    for stage in ("翻译", "时轴"):
+        await tm.claim_task(SHOW, "07", stage, "1", user_qq=100)
+        await tm.complete_task(SHOW, "07", stage, "1", user_qq=100)
+    outcome = await tm.complete_task(SHOW, "07", "校对", None, user_qq=100)
+    assert outcome.task.values[COL_PROGRESS] == PROGRESS_DONE
 
 
 # ============================================================ abandon
@@ -553,12 +578,20 @@ async def test_list_my_tasks_returns_active_only(tm: TaskManager) -> None:
     assert rec.values[COL_TYPE] == "翻译"
 
 
-async def test_list_available_filters_blocked_stages(tm: TaskManager) -> None:
+async def test_list_available_lists_all_unassigned(tm: TaskManager) -> None:
+    """D15：/待接 列出全部未分配任务（不再按前置过滤）。"""
     await tm.create_episode(SHOW, "07", 1)
     avail = tm.list_available()
-    # 只有「翻译P1」和「时轴P1」可接（其他工序前置未满足）
     types = {rec.values[COL_TYPE] for _, rec in avail}
-    assert types == {"翻译", "时轴"}
+    # 全部 6 个工序的未分配任务都应列出
+    assert types == {"翻译", "时轴", "校对", "后期", "监制", "压制"}
+    # 接走「翻译 1」后它应从待接列表消失
+    await tm.claim_task(SHOW, "07", "翻译", "1", user_qq=100)
+    avail2 = tm.list_available()
+    assert all(
+        not (rec.values[COL_TYPE] == "翻译" and rec.values[COL_ASSIGNEE] == "100")
+        for _, rec in avail2
+    )
 
 
 # ============================================================ update_task
@@ -620,35 +653,40 @@ async def test_d13_per_segment_unlock_only_matching_segment(
     assert ("时轴", "3") not in unlocked_pairs
 
 
-async def test_d13_claim_segmented_blocked_by_same_segment_only(
+async def test_d13_complete_segmented_blocked_by_same_segment_only(
     arrow_tm: TaskManager,
 ) -> None:
-    """试图接 时轴 2，但 翻译 2 没完 → blocked；与 翻译 1/3 状态无关。"""
+    """D15：时轴 2 可提前接，但 翻译 2 没完 → 不能完成；与 翻译 1/3 状态无关。"""
     await arrow_tm.create_episode(SHOW, "07", 3)
     # 完成 翻译 1（不应影响 时轴 2 的依赖）
     await arrow_tm.claim_task(SHOW, "07", "翻译", "1", user_qq=100)
     await arrow_tm.complete_task(SHOW, "07", "翻译", "1", user_qq=100)
-    # 接 时轴 2 应失败 — 因为 翻译 2 未完成
+    # 时轴 2 可提前接
+    await arrow_tm.claim_task(SHOW, "07", "时轴", "2", user_qq=200)
+    # 完成 时轴 2 应失败 — 因为 翻译 2 未完成
     with pytest.raises(PredecessorNotDoneError) as exc:
-        await arrow_tm.claim_task(SHOW, "07", "时轴", "2", user_qq=200)
+        await arrow_tm.complete_task(SHOW, "07", "时轴", "2", user_qq=200)
     # 错误信息应含段号（"翻译 2"）
     assert "翻译 2" in str(exc.value)
 
 
-async def test_d13_claim_segmented_works_when_same_segment_complete(
+async def test_d13_complete_segmented_works_when_same_segment_complete(
     arrow_tm: TaskManager,
 ) -> None:
-    """翻译 2 完成后，时轴 2 可接，但 时轴 3 仍 blocked。"""
+    """翻译 2 完成后，时轴 2 可完成；时轴 3 接了也仍不能完成（翻译 3 未完）。"""
     await arrow_tm.create_episode(SHOW, "07", 3)
     # 完成 翻译 2
     await arrow_tm.claim_task(SHOW, "07", "翻译", "2", user_qq=100)
     await arrow_tm.complete_task(SHOW, "07", "翻译", "2", user_qq=100)
-    # 时轴 2 应能接
-    outcome = await arrow_tm.claim_task(SHOW, "07", "时轴", "2", user_qq=200)
+    # 时轴 2 接 + 完成 都应成功
+    await arrow_tm.claim_task(SHOW, "07", "时轴", "2", user_qq=200)
+    outcome = await arrow_tm.complete_task(SHOW, "07", "时轴", "2", user_qq=200)
     assert outcome.task.values[COL_SEGMENT] == "2"
-    # 时轴 3 仍 blocked
+    assert outcome.task.values[COL_PROGRESS] == PROGRESS_DONE
+    # 时轴 3 可接，但 翻译 3 未完成 → 不能完成
+    await arrow_tm.claim_task(SHOW, "07", "时轴", "3", user_qq=200)
     with pytest.raises(PredecessorNotDoneError):
-        await arrow_tm.claim_task(SHOW, "07", "时轴", "3", user_qq=200)
+        await arrow_tm.complete_task(SHOW, "07", "时轴", "3", user_qq=200)
 
 
 async def test_d13_segmented_to_unsegmented_uses_all_done(
@@ -671,28 +709,29 @@ async def test_d13_segmented_to_unsegmented_uses_all_done(
     assert ("校对", "0") in o2.newly_unlocked_tasks
 
 
-async def test_d13_list_available_filters_by_same_segment(
+async def test_d13_list_available_lists_all_unassigned_segments(
     arrow_tm: TaskManager,
 ) -> None:
-    """list_available 应正确按段过滤：初始只有翻译三段可接，时轴全 blocked。"""
+    """D15：list_available 列出全部未分配段，不再按前置过滤。"""
     await arrow_tm.create_episode(SHOW, "07", 3)
     avail = arrow_tm.list_available()
     by_type: dict[str, list[str]] = {}
     for _, rec in avail:
         by_type.setdefault(rec.values[COL_TYPE], []).append(rec.values[COL_SEGMENT])
+    # 翻译/时轴 三段都在；校对等不分段工序也在
     assert sorted(by_type.get("翻译", [])) == ["1", "2", "3"]
-    assert "时轴" not in by_type  # 全 blocked
+    assert sorted(by_type.get("时轴", [])) == ["1", "2", "3"]
+    assert by_type.get("校对") == ["0"]
 
-    # 完成 翻译 2 → 时轴 2 应进入 available
-    await arrow_tm.claim_task(SHOW, "07", "翻译", "2", user_qq=100)
-    await arrow_tm.complete_task(SHOW, "07", "翻译", "2", user_qq=100)
+    # 接走 时轴 2 后它从待接消失，时轴 1/3 仍在
+    await arrow_tm.claim_task(SHOW, "07", "时轴", "2", user_qq=100)
     avail2 = arrow_tm.list_available()
     timing_segs = sorted(
         rec.values[COL_SEGMENT]
         for _, rec in avail2
         if rec.values[COL_TYPE] == "时轴"
     )
-    assert timing_segs == ["2"]
+    assert timing_segs == ["1", "3"]
 
 
 async def test_d13_unsegmented_pipeline_unaffected(arrow_tm: TaskManager) -> None:

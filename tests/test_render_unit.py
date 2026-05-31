@@ -333,10 +333,11 @@ def test_render_delete_summary_lists_active_tasks() -> None:
         expires_at=datetime(2026, 5, 26, 18, 0, 30),
         overwrote_previous=False,
     )
-    text = render_delete_summary(summary)
+    text = str(render_delete_summary(summary))
     assert "即将删除" in text
     assert "共 2 条" in text
     assert "1 条已分配/进行中" in text
+    assert "[CQ:at,qq=100]" in text  # D16：已分配组员用艾特码
     assert "确认删除" in text
 
 
@@ -348,7 +349,7 @@ def test_render_delete_summary_overwrite_note() -> None:
         expires_at=datetime(2026, 5, 26, 18, 0, 30),
         overwrote_previous=True,
     )
-    assert "已覆盖" in render_delete_summary(summary)
+    assert "已覆盖" in str(render_delete_summary(summary))
 
 
 def test_render_delete_done() -> None:
@@ -398,18 +399,18 @@ def test_render_progress_includes_all_columns_in_pipeline_order() -> None:
             COL_ASSIGNEE: "",
         }),
     ]
-    text = render_progress("淡岛百景", "07", records)
+    text = str(render_progress("淡岛百景", "07", records))
     assert "淡岛百景 第07集" in text
     assert "翻译" in text
     assert "校对" in text
-    assert "@100" in text  # 已分配的展示 @
+    assert "[CQ:at,qq=100]" in text  # D16：已分配的展示真实艾特码
     assert "05-20" in text  # 完成时间月日
     # 翻译应在校对之前出现
     assert text.index("翻译") < text.index("校对")
 
 
 def test_render_progress_empty_records_shows_placeholder() -> None:
-    text = render_progress("X", "99", [])
+    text = str(render_progress("X", "99", []))
     assert "暂无任务记录" in text
 
 
@@ -421,14 +422,14 @@ def test_render_my_tasks_with_entries() -> None:
         ("淡岛百景", _make_record(**{COL_TYPE: "翻译", COL_SEGMENT: "1"})),
         ("孤独摇滚", _make_record(**{COL_TYPE: "时轴", COL_SEGMENT: SEGMENT_NONE})),
     ]
-    text = render_my_tasks(100, tasks)
-    assert "@100" in text
+    text = str(render_my_tasks(100, tasks))
+    assert "[CQ:at,qq=100]" in text  # D16：抬头 @自己用艾特码
     assert "淡岛百景" in text
     assert "孤独摇滚" in text
 
 
 def test_render_my_tasks_empty() -> None:
-    assert "🎉" in render_my_tasks(100, [])
+    assert "🎉" in str(render_my_tasks(100, []))
 
 
 def test_render_available_emits_commands() -> None:

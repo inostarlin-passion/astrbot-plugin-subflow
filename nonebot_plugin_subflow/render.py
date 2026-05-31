@@ -197,29 +197,32 @@ def render_create_episode(outcome: CreateEpisodeOutcome) -> str:
     )
 
 
-def render_delete_summary(summary: DeleteSummary) -> str:
-    """复用 task_manager 已经准备好的摘要文案。"""
-    lines = [
+def render_delete_summary(summary: DeleteSummary) -> Message:
+    """删除确认摘要。D16：已分配明细里的组员用 CQ 艾特码，故返回 Message。"""
+    msg = Message()
+    msg += MessageSegment.text(
         f"⚠️ 即将删除：{summary.show} 第{summary.episode}集 "
         f"共 {len(summary.matched)} 条记录"
-    ]
+    )
     active = [
         r
         for r in summary.matched
         if r.values.get(COL_PROGRESS) in (PROGRESS_ASSIGNED, PROGRESS_IN_PROGRESS)
     ]
     if active:
-        details = "、".join(
-            f"{r.values.get(COL_TYPE)}{r.values.get(COL_SEGMENT) or ''}"
-            f"(@{r.values.get(COL_ASSIGNEE)})"
-            for r in active
-        )
-        lines.append(f"  其中 {len(active)} 条已分配/进行中：{details}")
+        msg += MessageSegment.text(f"\n  其中 {len(active)} 条已分配/进行中：")
+        for i, r in enumerate(active):
+            if i > 0:
+                msg += MessageSegment.text("、")
+            label = f"{r.values.get(COL_TYPE)}{r.values.get(COL_SEGMENT) or ''}"
+            msg += MessageSegment.text(f"{label}(")
+            msg += assignee_segment(r.values.get(COL_ASSIGNEE))
+            msg += MessageSegment.text(")")
     if summary.overwrote_previous:
-        lines.append("（已覆盖你之前的待确认操作）")
+        msg += MessageSegment.text("\n（已覆盖你之前的待确认操作）")
     until = summary.expires_at.strftime("%H:%M:%S")
-    lines.append(f"回复「确认删除」执行，{until} 之前有效")
-    return "\n".join(lines)
+    msg += MessageSegment.text(f"\n回复「确认删除」执行，{until} 之前有效")
+    return msg
 
 
 def render_delete_done(outcome: DeleteOutcome) -> str:
@@ -239,12 +242,18 @@ def render_archive(outcome: ArchiveOutcome) -> str:
 # ============================================================ progress board
 
 
-def render_progress(show: str, episode: str, records: list[Record]) -> str:
-    """`/进度 番剧 集数` 的展板：按工序+分段排版。"""
-    if not records:
-        return f"📺 {show} 第{episode}集 暂无任务记录"
+def render_progress(show: str, episode: str, records: list[Record]) -> Message:
+    """`/进度 番剧 集数` 的展板：按工序+分段排版。
 
-    lines = [f"📺 {show} 第{episode}集 进度一览", "─" * 22]
+    D16：组员用 CQ 艾特码（数字 QQ → 真实 @），不再是字面量文本，故返回 Message。
+    """
+    if not records:
+        return Message(
+            MessageSegment.text(f"📺 {show} 第{episode}集 暂无任务记录")
+        )
+
+    msg = Message()
+    msg += MessageSegment.text(f"📺 {show} 第{episode}集 进度一览\n" + "─" * 22)
     # 排序键：(类型出现顺序, 分段名)
     type_order: dict[str, int] = {}
     for r in records:
@@ -265,42 +274,41 @@ def render_progress(show: str, episode: str, records: list[Record]) -> str:
         segment = r.values.get(COL_SEGMENT, "")
         if segment and segment != SEGMENT_NONE:
             label = f"{label} {segment}"
+        msg += MessageSegment.text(f"\n{icon} {progress}  {label}")
         assignee = r.values.get(COL_ASSIGNEE) or ""
-        assignee_display = (
-            f"@{assignee}" if assignee and assignee.isdigit() else assignee
-        )
-        suffix_parts: list[str] = []
-        if assignee_display:
-            suffix_parts.append(assignee_display)
+        if assignee:
+            msg += MessageSegment.text("  ")
+            msg += assignee_segment(assignee)
         if progress == PROGRESS_DONE and r.values.get(COL_DONE_TIME):
             done = r.values[COL_DONE_TIME]
-            if isinstance(done, datetime):
-                suffix_parts.append(done.strftime("%m-%d"))
-            else:
-                suffix_parts.append(str(done))
-        suffix = "  ".join(suffix_parts)
-        lines.append(f"{icon} {progress}  {label}  {suffix}".rstrip())
-    return "\n".join(lines)
+            done_str = (
+                done.strftime("%m-%d") if isinstance(done, datetime) else str(done)
+            )
+            msg += MessageSegment.text(f"  {done_str}")
+    return msg
 
 
 # ============================================================ list / bindings
 
 
-def render_my_tasks(user_qq: int, tasks: list[tuple[str, Record]]) -> str:
+def render_my_tasks(user_qq: int, tasks: list[tuple[str, Record]]) -> Message:
+    """D16：抬头 @自己用 CQ 艾特码，故返回 Message。"""
     if not tasks:
-        return "你当前没有未完成的任务 🎉"
-    lines = [f"@{user_qq} 名下未完成的 {len(tasks)} 个任务："]
+        return Message(MessageSegment.text("你当前没有未完成的任务 🎉"))
+    msg = Message()
+    msg += MessageSegment.at(user_qq)
+    msg += MessageSegment.text(f" 名下未完成的 {len(tasks)} 个任务：")
     for show, rec in tasks:
         icon = _PROGRESS_ICON.get(
             rec.values.get(COL_PROGRESS, ""), "•"
         )
         seg = rec.values.get(COL_SEGMENT, "")
         seg_part = f" {seg}" if seg and seg != SEGMENT_NONE else ""
-        lines.append(
-            f"  {icon} {show}{rec.values.get(COL_EPISODE)} "
+        msg += MessageSegment.text(
+            f"\n  {icon} {show}{rec.values.get(COL_EPISODE)} "
             f"{rec.values.get(COL_TYPE)}{seg_part}"
         )
-    return "\n".join(lines)
+    return msg
 
 
 def render_available(tasks: list[tuple[str, Record]]) -> str:
