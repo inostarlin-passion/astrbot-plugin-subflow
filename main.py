@@ -620,7 +620,7 @@ class SubflowPlugin(Star):
         episode = args[1] if len(args) > 1 else None
 
         try:
-            board = deps.require_task_manager().list_episode(show=show_name, episode=episode)
+            records = deps.require_task_manager().list_episode(show=show_name, episode=episode)
             msg = render.render_episode_board(records)
             yield event.plain_result(msg)
         except (TaskError, PipelineError) as e:
