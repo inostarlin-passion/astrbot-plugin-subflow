@@ -102,7 +102,7 @@ def test_render_claim_includes_at_and_label() -> None:
     msg = render_claim(ClaimOutcome(task=_make_record(), ref=_ref()))
     text = str(msg)
     assert "[CQ:at,qq=100]" in text
-    assert "淡岛百景07 翻译 1" in text
+    assert "淡岛百景 第07集 翻译 第1段" in text
     assert "✅" in text
 
 
@@ -209,7 +209,7 @@ def test_render_complete_per_segment_unlock_message() -> None:
         blocking_stages=[],
     )
     text = str(render_complete(outcome))
-    assert "时轴 1 现在可以接了" in text
+    assert "时轴 第1段 现在可以接了" in text
     assert "/接活 淡岛百景 07 时轴 1" in text
 
 
@@ -246,7 +246,7 @@ def test_render_complete_multiple_segments_unlocked_together() -> None:
         blocking_stages=[],
     )
     text = str(render_complete(outcome))
-    assert "后期 1/2/3" in text
+    assert "后期 第1/2/3段" in text
     assert text.count("🎉") == 1  # 合并成一行
 
 
@@ -284,7 +284,7 @@ def test_render_complete_ats_held_downstream_holder() -> None:
     )
     text = str(render_complete(outcome))
     assert "[CQ:at,qq=200]" in text
-    assert "时轴 1" in text
+    assert "时轴 第1段" in text
     assert "可以开始了" in text
     assert "现在可以接了" not in text  # 不发广播
 

@@ -278,6 +278,19 @@ NoneBot2 通过 Pydantic BaseSettings 读取 `.env` 时，`KEY=` 得到的是空
 - `task_manager.py`：`claim_task`/`complete_task`/`abandon_task`/`set_in_progress`/`update_task` 锁内 `get_record` → `await refresh_record`；`claim_task` 闸门加"组员为空"；`update_task` 重读但不拦
 - 复用现成 `cache.refresh_record`，无需新增缓存方法
 
+### D20 · 回复标签可读化（第N集 / 第N段）（追加）
+
+原回复把集数/分段贴在一起读不清：`/接活 测试 1 时轴 1` → `@文何 已接 测试1 时轴 1 ✅`（"测试1" 粘连、"时轴 1" 分不清）。改成「第N集 / 第N段」让人一眼看懂。纯 render.py 改动。
+
+经 grilling 敲定 4 条：
+
+1. **格式**：`show 第N集 工序 第N段`（`测试 第1集 时轴 第1段`）；不分段（segment=0/空）省略「第N段」（`测试 第1集 校对`）。
+2. **非数字集数**：纯数字才用「第N集」；`OP`/`OVA1`/`ED` 原样（`测试 OP 时轴 第1段`）。
+3. **完整 vs 部分**：跨集/跨番列表（claim/完成等单条回复、`/我的任务`、外部变更汇总）用完整标签；已有「第X集」表头的展板/摘要（`/进度`、`/删除任务`、`/完成` 同集下游解锁行）每行不重复集数，只把分段写成「第N段」。
+4. **命令串保持原样**（约束）：`/接活 …` 建议命令仍是原始 token（`normalize_segment("第1段")≠"1"`，写成第N段会匹配不上），只美化描述性标签。
+
+**实现**：`render.py` 加 `_episode_label` / `_segment_label` / `_stage_seg_label`（部分）/ `_pretty_label`（完整）；`_task_label`、`_full_label` 改为内部走 `_pretty_label`；`render_progress` 行 / `render_delete_summary` 明细 / `render_complete` 同集解锁标签走 `_stage_seg_label`；命令串与 `render_available` 不动。
+
 ---
 
 ## 三、项目结构（增量于原设计文档 5.2）

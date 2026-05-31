@@ -62,12 +62,34 @@ def assignee_segment(raw: str | None) -> MessageSegment:
     return MessageSegment.text(raw or "?")
 
 
+def _episode_label(episode: str) -> str:
+    """D20：数字集数 → 「第N集」；非数字（OP/OVA1/ED）原样。"""
+    ep = str(episode)
+    return f"第{ep}集" if ep.isdigit() else ep
+
+
+def _segment_label(segment: str) -> str:
+    """D20：数字分段 → 「第N段」；"0"/空 → ""（不分段省略）。"""
+    seg = str(segment or "")
+    if not seg or seg == SEGMENT_NONE:
+        return ""
+    return f"第{seg}段" if seg.isdigit() else seg
+
+
+def _stage_seg_label(stage: str, segment: str) -> str:
+    """部分标签（已有「第X集」表头时用）：「时轴 第1段」/「校对」。"""
+    seg = _segment_label(segment)
+    return f"{stage} {seg}" if seg else str(stage)
+
+
+def _pretty_label(show: str, episode: str, stage: str, segment: str) -> str:
+    """完整标签（D20）：「测试 第1集 时轴 第1段」/「测试 第1集 校对」。"""
+    return f"{show} {_episode_label(episode)} {_stage_seg_label(stage, segment)}"
+
+
 def _task_label(ref) -> str:
-    """形如「淡岛百景7 翻译 2」或「淡岛百景7 校对」（不分段省略 segment）。"""
-    base = f"{ref.show}{ref.episode} {ref.stage}"
-    if ref.segment and ref.segment != SEGMENT_NONE:
-        return f"{base} {ref.segment}"
-    return base
+    """形如「淡岛百景 第7集 翻译 第2段」或「淡岛百景 第7集 校对」（D20）。"""
+    return _pretty_label(ref.show, ref.episode, ref.stage, ref.segment)
 
 
 def _segment_sort_key(seg: str) -> int:
@@ -133,15 +155,14 @@ def render_complete(outcome: CompleteOutcome) -> Message:
     for stage in order:
         segs = by_stage[stage]
         if len(segs) == 1 and segs[0] != SEGMENT_NONE:
-            label = f"{stage} {segs[0]}"
+            label = _stage_seg_label(stage, segs[0])  # 同集表头下，部分标签
             cmd = f"/接活 {outcome.ref.show} {outcome.ref.episode} {stage} {segs[0]}"
         elif len(segs) == 1 and segs[0] == SEGMENT_NONE:
             label = stage
             cmd = f"/接活 {outcome.ref.show} {outcome.ref.episode} {stage}"
         else:
             # 多段同时解锁
-            seg_list = "/".join(segs)
-            label = f"{stage} {seg_list}"
+            label = f"{stage} 第{'/'.join(segs)}段"
             cmd = f"/接活 {outcome.ref.show} {outcome.ref.episode} {stage} <段号>"
         msg += MessageSegment.text(
             f"\n🎉 {label} 现在可以接了 → {cmd}"
@@ -149,11 +170,10 @@ def render_complete(outcome: CompleteOutcome) -> Message:
 
     # D17/Q8：已被接走的下游解锁 → @ 持有人提示可开工
     for stage, seg, holder in outcome.newly_actionable_held:
-        held_label = stage if (not seg or seg == SEGMENT_NONE) else f"{stage} {seg}"
         msg += MessageSegment.text("\n")
         msg += assignee_segment(holder)
         msg += MessageSegment.text(
-            f" 你的 {outcome.ref.show}{outcome.ref.episode} {held_label} "
+            f" 你的 {_pretty_label(outcome.ref.show, outcome.ref.episode, stage, seg)} "
             f"前置已完成，可以开始了 ▶️"
         )
 
@@ -241,7 +261,9 @@ def render_delete_summary(summary: DeleteSummary) -> Message:
         for i, r in enumerate(active):
             if i > 0:
                 msg += MessageSegment.text("、")
-            label = f"{r.values.get(COL_TYPE)}{r.values.get(COL_SEGMENT) or ''}"
+            label = _stage_seg_label(
+                r.values.get(COL_TYPE, ""), r.values.get(COL_SEGMENT, "")
+            )
             msg += MessageSegment.text(f"{label}(")
             msg += assignee_segment(r.values.get(COL_ASSIGNEE))
             msg += MessageSegment.text(")")
@@ -297,10 +319,9 @@ def render_progress(show: str, episode: str, records: list[Record]) -> Message:
     for r in records_sorted:
         progress = r.values.get(COL_PROGRESS, PROGRESS_UNASSIGNED)
         icon = _PROGRESS_ICON.get(progress, "❓")
-        label = r.values.get(COL_TYPE, "?")
-        segment = r.values.get(COL_SEGMENT, "")
-        if segment and segment != SEGMENT_NONE:
-            label = f"{label} {segment}"
+        label = _stage_seg_label(
+            r.values.get(COL_TYPE, "?"), r.values.get(COL_SEGMENT, "")
+        )
         msg += MessageSegment.text(f"\n{icon} {progress}  {label}")
         assignee = r.values.get(COL_ASSIGNEE) or ""
         if assignee:
@@ -329,11 +350,14 @@ def render_my_tasks(user_qq: int, tasks: list[tuple[str, Record]]) -> Message:
         icon = _PROGRESS_ICON.get(
             rec.values.get(COL_PROGRESS, ""), "•"
         )
-        seg = rec.values.get(COL_SEGMENT, "")
-        seg_part = f" {seg}" if seg and seg != SEGMENT_NONE else ""
         msg += MessageSegment.text(
-            f"\n  {icon} {show}{rec.values.get(COL_EPISODE)} "
-            f"{rec.values.get(COL_TYPE)}{seg_part}"
+            f"\n  {icon} "
+            + _pretty_label(
+                show,
+                rec.values.get(COL_EPISODE, ""),
+                rec.values.get(COL_TYPE, ""),
+                rec.values.get(COL_SEGMENT, ""),
+            )
         )
     return msg
 
@@ -379,11 +403,8 @@ def render_pipeline_view(show: str, pipeline: Pipeline, is_default: bool) -> str
 
 
 def _full_label(show: str, episode: str, stage: str, segment: str) -> str:
-    """形如「淡岛百景07 翻译 1」；不分段省略 segment。"""
-    base = f"{show}{episode} {stage}"
-    if segment and segment != SEGMENT_NONE:
-        return f"{base} {segment}"
-    return base
+    """形如「淡岛百景 第7集 翻译 第1段」；不分段省略段（D20，统一走 _pretty_label）。"""
+    return _pretty_label(show, episode, stage, segment)
 
 
 def _external_change_line(ch: ExternalChange) -> Message:
@@ -446,11 +467,10 @@ def _external_change_line(ch: ExternalChange) -> Message:
 
 
 def _unlock_unassigned_line(show: str, episode: str, stage: str, seg: str) -> Message:
+    label = _pretty_label(show, episode, stage, seg)  # 外部汇总跨集，用完整标签
     if seg and seg != SEGMENT_NONE:
-        label = f"{stage} {seg}"
         cmd = f"/接活 {show} {episode} {stage} {seg}"
     else:
-        label = stage
         cmd = f"/接活 {show} {episode} {stage}"
     return Message(MessageSegment.text(f"🎉 {label} 现在可以接了 → {cmd}"))
 
