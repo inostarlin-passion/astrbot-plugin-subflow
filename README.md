@@ -1,7 +1,3 @@
-好的，我来帮你重写 README，把 NoneBot 相关内容全部替换成 AstrBot！
-
----
-
 # astrbot-plugin-subflow
 
 字幕组任务管理 Bot — 对接腾讯文档智能表，在 QQ 群里管理「接活 / 完成 / 依赖跟踪 / 自动通知」。
