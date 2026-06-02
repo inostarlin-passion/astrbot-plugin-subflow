@@ -99,6 +99,7 @@ class SubflowPlugin(Star):
 
         # 2. 初始化依赖（复用原有 deps.init）
         await deps.init(config)
+        log.info("subflow deps.init 完成，缓存定时同步应已启动")
 
         # 3. 注册外部变更推送回调
         from . import deps as deps_module
@@ -717,7 +718,7 @@ class SubflowPlugin(Star):
         episode = args[1] if len(args) > 1 else None
 
         try:
-            records = await deps.require_task_manager().list_episode(show=show_name, episode=episode)
+            records = deps.require_task_manager().list_episode(show=show_name, episode=episode)
             msg = render.render_progress(show_name, episode, records)
             yield event.plain_result(msg)
         except (TaskError, PipelineError) as e:

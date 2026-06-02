@@ -17,7 +17,7 @@ class MessageSegment:
         return text
     @staticmethod
     def at(qq) -> str:
-        return f"[CQ:at,qq={qq}]"
+        return f"@{qq}"
 # ★★★ 兼容代码结束 ★★★
 
 from datetime import datetime
@@ -70,7 +70,7 @@ from .task_manager import (
 def assignee_segment(raw: str | None) -> str:
     """组员字段 → 文本。纯数字 QQ → @QQ号；其他 → 文本。"""
     if raw and str(raw).isdigit():
-        return f"[CQ:at,qq={raw}]"
+        return f"@{raw}"
     return raw or "?"
 
 
