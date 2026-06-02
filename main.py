@@ -380,7 +380,7 @@ class SubflowPlugin(Star):
         segment_count = self._parse_segment_count(args[2] if len(args) > 2 else None)
 
         try:
-            outcome = deps.require_task_manager().create_episode(
+            outcome = await deps.require_task_manager().create_episode(
                 show=show_name, episode=episode, segment_count=segment_count
             )
             summary = render.render_create_episode(outcome)
