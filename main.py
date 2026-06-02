@@ -698,7 +698,7 @@ class SubflowPlugin(Star):
 
         try:
             records = deps.require_task_manager().list_episode(show=show_name, episode=episode)
-            msg = render.render_episode_board(records)
+            msg = render.render_progress(show_name, episode, records)
             yield event.plain_result(msg)
         except (TaskError, PipelineError) as e:
             yield event.plain_result(f"⚠️ {e}")
