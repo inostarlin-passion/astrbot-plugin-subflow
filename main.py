@@ -8,16 +8,15 @@
 """
 
 from __future__ import annotations
-import re
-from astrbot.api.message_components import At, Plain # type: ignore
-import asyncio
+
+import asyncio          # ★ 新增
 import logging
 from pathlib import Path
 from typing import Any
 
-from astrbot.api.event import filter, AstrMessageEvent # type: ignore
-from astrbot.api.star import Context, Star # type: ignore
-from astrbot.api import logger as astr_logger # type: ignore
+from astrbot.api.event import filter, AstrMessageEvent
+from astrbot.api.star import Context, Star
+from astrbot.api import logger as astr_logger
 
 # 复用原有业务模块（完全不需要改）
 from . import deps, render
@@ -121,7 +120,7 @@ class SubflowPlugin(Star):
         """实际发送群消息"""
         origin = self._group_origins.get(str(group_id))
         if origin:
-            from astrbot.api.event import MessageChain # type: ignore
+            from astrbot.api.event import MessageChain
             chain = MessageChain().message(message)
             await self.context.send_message(origin, chain)
         else:
@@ -195,18 +194,6 @@ class SubflowPlugin(Star):
             raise ValueError(f"字段参数格式错误：{token}（应为 字段=值）")
         k, v = token.split("=", 1)
         return k.strip(), v.strip()
-
-    def _text_to_chain(self, text: str) -> list:
-        """将文本中的 @数字 转换为真正的 At 组件"""
-        parts = re.split(r'(@\d+)', text)
-        chain = []
-        for part in parts:
-            if part.startswith('@') and part[1:].isdigit():
-                chain.append(At(qq=part[1:]))
-            else:
-                if part:
-                    chain.append(Plain(text=part))
-            return chain
 
     def _handle_error(self, exc: Exception):
         """已知异常 → 友好中文；未知 → 日志 + 通用提示"""
@@ -418,7 +405,7 @@ class SubflowPlugin(Star):
                 show=show_name, episode=episode, segment_count=segment_count
             )
             summary = render.render_create_episode(outcome)
-            yield event.chain_result(self._text_to_chain(summary))
+            yield event.plain_result(summary)
         except (TaskError, PipelineError) as e:
             yield event.plain_result(f"⚠️ {e}")
 
@@ -448,7 +435,7 @@ class SubflowPlugin(Star):
                 show=show_name, episode=episode_label, stages=stages
             )
             summary = render.render_create_episode(outcome)
-            yield event.chain_result(self._text_to_chain(summary))
+            yield event.plain_result(summary)
         except (TaskError, PipelineError) as e:
             yield event.plain_result(f"⚠️ {e}")
 
@@ -485,7 +472,7 @@ class SubflowPlugin(Star):
                 "stage": stage,
                 "segment": segment,
             }
-            yield event.chain_result(self._text_to_chain(msg + "\n\n发送「确认删除」以确认此操作"))
+            yield event.plain_result(msg + "\n\n发送「确认删除」以确认此操作")
         except (TaskError, PipelineError) as e:
             yield event.plain_result(f"⚠️ {e}")
 
@@ -506,7 +493,7 @@ class SubflowPlugin(Star):
         try:
             outcome = deps.require_task_manager().confirm_pending(user_id)
             msg = render.render_delete_done(outcome)
-            yield event.chain_result(self._text_to_chain(msg))
+            yield event.plain_result(msg)
         except (TaskError, PipelineError) as e:
             yield event.plain_result(f"⚠️ {e}")
 
@@ -545,7 +532,7 @@ class SubflowPlugin(Star):
                 segment=segment, field=field, value=value,
             )
             msg = render.render_update(outcome)
-            yield event.chain_result(self._text_to_chain(msg))
+            yield event.plain_result(msg)
         except (TaskError, PipelineError, ValueError) as e:
             yield event.plain_result(f"⚠️ {e}")
 
@@ -574,7 +561,7 @@ class SubflowPlugin(Star):
                 show=show_name, episode=episode
             )
             for o in outcomes:
-                yield event.chain_result(self._text_to_chain(render.render_archive(o)))
+                yield event.plain_result(render.render_archive(o))
         except (TaskError, PipelineError) as e:
             yield event.plain_result(f"⚠️ {e}")
 
@@ -611,7 +598,7 @@ class SubflowPlugin(Star):
                 segment=segment, user_qq=user_id,
             )
             msg = render.render_claim(outcome)
-            yield event.chain_result(self._text_to_chain(msg))
+            yield event.plain_result(msg)
         except (TaskError, PipelineError) as e:
             yield event.plain_result(f"⚠️ {e}")
 
@@ -645,7 +632,7 @@ class SubflowPlugin(Star):
             )
             msgs = render.render_complete(outcome)
             for msg in msgs if isinstance(msgs, list) else [msgs]:
-                yield event.chain_result(self._text_to_chain(msg))
+                yield event.plain_result(msg)
         except (TaskError, PipelineError) as e:
             yield event.plain_result(f"⚠️ {e}")
 
@@ -678,7 +665,7 @@ class SubflowPlugin(Star):
                 segment=segment, user_qq=user_id,
             )
             msg = render.render_abandon(outcome)
-            yield event.chain_result(self._text_to_chain(msg))
+            yield event.plain_result(msg)
         except (TaskError, PipelineError) as e:
             yield event.plain_result(f"⚠️ {e}")
 
@@ -711,7 +698,7 @@ class SubflowPlugin(Star):
                 segment=segment, user_qq=user_id,
             )
             msg = render.render_in_progress(outcome)
-            yield event.chain_result(self._text_to_chain(msg))
+            yield event.plain_result(msg)
         except (TaskError, PipelineError) as e:
             yield event.plain_result(f"⚠️ {e}")
 
@@ -733,7 +720,7 @@ class SubflowPlugin(Star):
         try:
             records = deps.require_task_manager().list_episode(show=show_name, episode=episode)
             msg = render.render_progress(show_name, episode, records)
-            yield event.chain_result(self._text_to_chain(msg))
+            yield event.plain_result(msg)
         except (TaskError, PipelineError) as e:
             yield event.plain_result(f"⚠️ {e}")
 
@@ -748,7 +735,7 @@ class SubflowPlugin(Star):
                 yield event.plain_result("你目前没有未完成任务")
                 return
             msg = render.render_my_tasks(user_id, tasks)
-            yield event.chain_result(self._text_to_chain(msg))
+            yield event.plain_result(msg)
         except TaskError as e:
             yield event.plain_result(f"⚠️ {e}")
 
