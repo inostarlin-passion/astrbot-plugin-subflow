@@ -4,7 +4,7 @@
 架构说明：
 - 继承 Star 基类，所有命令用 @filter.command 注册
 - 业务层代码（task_manager/cache/bindings/pipeline/storage）完全复用，无需改动
-- 渲染层 render.py 仅需将 MessageSegment.at 改为 [CQ:at,qq=xxx] 文本格式
+- 渲染层 render.py 仅需在头部加几行兼容代码
 """
 
 from __future__ import annotations
@@ -36,13 +36,20 @@ class SubflowPlugin(Star):
         super().__init__(context)
         self.context = context
         self._initialized = False
+        # 用来存群 unified_msg_origin，供定时任务发消息用
+        self._group_origins: dict[str, str] = {}
+        # 用来存删除任务的二次确认状态
+        self._confirm_states: dict[str, dict] = {}
 
-    async def initialize(self) -> None:
-        """插件初始化：读取配置 → 构造所有单例 → 加载缓存"""
+    @filter.on_astrbot_loaded()
+    async def on_astrbot_loaded(self):
+        """AstrBot 初始化完成后自动调用（替代 NoneBot 的 on_startup）"""
         if self._initialized:
             return
 
-        # 1. 读取配置（从环境变量，兼容原有 .env 格式）
+        log.info("subflow 插件开始初始化...")
+
+        # 1. 读取配置
         cfg_dict = {}
         plugin_dir = Path(__file__).parent
         env_path = plugin_dir / ".key"
@@ -68,8 +75,32 @@ class SubflowPlugin(Star):
 
         # 2. 初始化依赖（复用原有 deps.init）
         await deps.init(config)
+
+        # 3. 注册外部变更推送回调
+        from . import deps as deps_module
+        deps_module.set_send_group_msg_handler(self._send_group_msg)
+
         self._initialized = True
         log.info("subflow 插件初始化完成")
+
+    # ================================================================
+    # 主动消息发送（给 deps._on_sync_changes 用）
+    # ================================================================
+
+    def _send_group_msg(self, group_id: int, message: str) -> None:
+        """供 deps._on_sync_changes 调用的发送回调（同步接口，内部创建异步任务）"""
+        import asyncio
+        asyncio.create_task(self._do_send_group_msg(group_id, message))
+
+    async def _do_send_group_msg(self, group_id: int, message: str):
+        """实际发送群消息"""
+        origin = self._group_origins.get(str(group_id))
+        if origin:
+            from astrbot.api.event import MessageChain
+            chain = MessageChain().message(message)
+            await self.context.send_message(origin, chain)
+        else:
+            log.warning("未找到群 %s 的 unified_msg_origin，无法发送主动消息", group_id)
 
     # ================================================================
     # 辅助方法
@@ -80,16 +111,9 @@ class SubflowPlugin(Star):
         return event.get_sender_id()
 
     def _get_group_id(self, event: AstrMessageEvent) -> int | None:
-        """获取群号（AstrBot 中通过 message_obj 获取）"""
-        # AstrBot 的 message_obj 可能包含群信息
-        # 这里根据 AstrBot 的实际 API 调整
-        msg_obj = event.message_obj
-        if hasattr(msg_obj, 'group_id'):
-            return int(msg_obj.group_id)
-        if hasattr(msg_obj, 'group_name'):
-            # 有些实现可能没有直接 group_id
-            return None
-        return None
+        """获取群号（从 AstrBotMessage 对象获取）"""
+        gid = event.message_obj.group_id
+        return int(gid) if gid else None
 
     def _is_group_msg(self, event: AstrMessageEvent) -> bool:
         """判断是否为群消息"""
@@ -109,22 +133,24 @@ class SubflowPlugin(Star):
             except ValueError:
                 pass
 
-        # 群主/群管检查（需要 AstrBot 提供相应 API）
-        # 在 AstrBot 中，可能需要通过 context 获取群成员信息
-        # 这里作为简化，先只检查超管
-        # TODO: 根据 AstrBot 的实际 API 补充群管检查
+        # 群主/群管检查（简化：暂时只检查超管）
+        # TODO: 后续可通过 OneBot API 查询群成员角色
         return False
 
     async def _reject_if_main_group(self, event: AstrMessageEvent) -> str | None:
-        """D9：总群拒绝写操作。返回 True 表示已被拒绝（应终止处理）"""
+        """D9：总群拒绝写操作。返回拒绝文本（非空表示应终止处理）"""
         group_id = self._get_group_id(event)
         if group_id and deps.require_bindings().is_main_group(group_id):
             return "⚠️ 写操作请到对应工作群执行，总群仅支持查询"
         return None
 
     def _split_args(self, event: AstrMessageEvent) -> list[str]:
-        """分割消息文本为参数列表"""
-        return event.message_str.strip().split()
+        """分割消息文本为参数列表。
+        注意：event.message_str 包含完整消息（含命令名），需要去掉第一个元素。
+        """
+        parts = event.message_str.strip().split()
+        # 去掉命令名（例如 "/接活"）
+        return parts[1:] if len(parts) > 1 else []
 
     def _parse_segment_count(self, token: str | None) -> int:
         """D12：/新建集 X 7 3 里的 "3" → 3；省略则默认 1"""
@@ -167,13 +193,17 @@ class SubflowPlugin(Star):
     # 绑定相关命令
     # ================================================================
 
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)
     @filter.command("绑定id")
     async def bind_id(self, event: AstrMessageEvent):
         """管理员，绑定子表"""
-        if not await self._is_admin(event):
-            yield event.plain_result("⚠️ 仅管理员可执行此操作")
-            return
-        if await self._reject_if_main_group(event):
+        # ★ 记录群的 unified_msg_origin，供以后主动推送用
+        self._group_origins[str(event.message_obj.group_id)] = event.unified_msg_origin
+
+        reject_msg = await self._reject_if_main_group(event)
+        if reject_msg:
+            yield event.plain_result(reject_msg)
             return
 
         args = self._split_args(event)
@@ -195,24 +225,27 @@ class SubflowPlugin(Star):
                 alias=alias,
                 file_id=file_id_or_encoded,
                 sheet_id=sheet_id,
+                bound_by=self._get_user_id(event),  # ★ 添加 bound_by
             )
-            # 如果是 encoded ID，需转成真实 file_id
-            file_id = outcome.file_id
             # 加载到缓存
             if deps.storage:
+                file_id = outcome.file_id
                 n = await deps.require_cache().add_sheet(file_id, sheet_id)
                 log.info("loaded %d records for %s", n, alias)
             yield event.plain_result(f"✅ 绑定成功：{alias}")
         except BindingError as e:
             yield event.plain_result(f"⚠️ {e}")
 
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)
     @filter.command("解绑")
     async def unbind(self, event: AstrMessageEvent):
         """管理员，解绑子表"""
-        if not await self._is_admin(event):
-            yield event.plain_result("⚠️ 仅管理员可执行此操作")
-            return
-        if await self._reject_if_main_group(event):
+        self._group_origins[str(event.message_obj.group_id)] = event.unified_msg_origin
+
+        reject_msg = await self._reject_if_main_group(event)
+        if reject_msg:
+            yield event.plain_result(reject_msg)
             return
 
         args = self._split_args(event)
@@ -222,7 +255,10 @@ class SubflowPlugin(Star):
         alias = " ".join(args)
 
         try:
-            deps.require_bindings().unbind(alias)
+            deps.require_bindings().unbind(
+                group_id=self._get_group_id(event),  # ★ 添加 group_id
+                alias=alias,
+            )
             yield event.plain_result(f"✅ 已解绑：{alias}")
         except BindingError as e:
             yield event.plain_result(f"⚠️ {e}")
@@ -246,7 +282,10 @@ class SubflowPlugin(Star):
                     return
 
         group_id = self._get_group_id(event)
-        entries = deps.require_bindings().list_for_group(group_id, show_all=show_all)
+        # ★ 改用正确的方法名
+        entries = deps.require_bindings().get_for_group(group_id)
+        if show_all:
+            entries = deps.require_bindings().list_all()
         if not entries:
             yield event.plain_result("当前无绑定记录" if not show_all else "全部绑定列表为空")
             return
@@ -260,17 +299,20 @@ class SubflowPlugin(Star):
     # 流水线相关命令
     # ================================================================
 
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)
     @filter.command("设置流水线")
     async def set_pipeline(self, event: AstrMessageEvent):
         """管理员，设置流水线 DSL"""
-        if not await self._is_admin(event):
-            yield event.plain_result("⚠️ 仅管理员可执行此操作")
-            return
-        if await self._reject_if_main_group(event):
+        self._group_origins[str(event.message_obj.group_id)] = event.unified_msg_origin
+
+        reject_msg = await self._reject_if_main_group(event)
+        if reject_msg:
+            yield event.plain_result(reject_msg)
             return
 
         text = event.message_str.strip()
-        # 去掉命令前缀
+        # 去掉命令前缀和命令名
         prefix = "/设置流水线"
         if text.startswith(prefix):
             text = text[len(prefix):].strip()
@@ -313,13 +355,16 @@ class SubflowPlugin(Star):
     # 集级操作命令
     # ================================================================
 
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)
     @filter.command("新建集")
     async def new_episode(self, event: AstrMessageEvent):
         """管理员，新建集"""
-        if not await self._is_admin(event):
-            yield event.plain_result("⚠️ 仅管理员可执行此操作")
-            return
-        if await self._reject_if_main_group(event):
+        self._group_origins[str(event.message_obj.group_id)] = event.unified_msg_origin
+
+        reject_msg = await self._reject_if_main_group(event)
+        if reject_msg:
+            yield event.plain_result(reject_msg)
             return
 
         args = self._split_args(event)
@@ -340,13 +385,16 @@ class SubflowPlugin(Star):
         except (TaskError, PipelineError) as e:
             yield event.plain_result(f"⚠️ {e}")
 
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)
     @filter.command("新建特殊")
     async def new_special(self, event: AstrMessageEvent):
         """管理员，新建特殊集（OP/ED）"""
-        if not await self._is_admin(event):
-            yield event.plain_result("⚠️ 仅管理员可执行此操作")
-            return
-        if await self._reject_if_main_group(event):
+        self._group_origins[str(event.message_obj.group_id)] = event.unified_msg_origin
+
+        reject_msg = await self._reject_if_main_group(event)
+        if reject_msg:
+            yield event.plain_result(reject_msg)
             return
 
         args = self._split_args(event)
@@ -367,13 +415,16 @@ class SubflowPlugin(Star):
         except (TaskError, PipelineError) as e:
             yield event.plain_result(f"⚠️ {e}")
 
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)
     @filter.command("删除任务")
     async def delete_task(self, event: AstrMessageEvent):
         """管理员，删除任务（需二次确认）"""
-        if not await self._is_admin(event):
-            yield event.plain_result("⚠️ 仅管理员可执行此操作")
-            return
-        if await self._reject_if_main_group(event):
+        self._group_origins[str(event.message_obj.group_id)] = event.unified_msg_origin
+
+        reject_msg = await self._reject_if_main_group(event)
+        if reject_msg:
+            yield event.plain_result(reject_msg)
             return
 
         args = self._split_args(event)
@@ -385,53 +436,53 @@ class SubflowPlugin(Star):
         episode = args[1]
         stage = args[2] if len(args) > 2 else None
         segment = args[3] if len(args) > 3 else None
+        user_id = self._get_user_id(event)
 
         try:
             summary = deps.require_task_manager().delete_task(show_name, episode, stage, segment)
             msg = render.render_delete_summary(summary)
-            # 保存待确认状态到 context 中
-            key = f"confirm_delete_{self._get_user_id(event)}"
-            await self.context.record_handler(key, {
+            # ★ 用类变量存确认状态
+            self._confirm_states[user_id] = {
                 "show": show_name,
                 "episode": episode,
                 "stage": stage,
                 "segment": segment,
-            })
+            }
             yield event.plain_result(msg + "\n\n发送「确认删除」以确认此操作")
         except (TaskError, PipelineError) as e:
             yield event.plain_result(f"⚠️ {e}")
 
     @filter.command("确认删除")
     async def confirm_delete(self, event: AstrMessageEvent):
-        """确认删除（二次确认）"""
-        if await self._reject_if_main_group(event):
+        """确认删除（二次确认）—— 用户需发送 /确认删除"""
+        reject_msg = await self._reject_if_main_group(event)
+        if reject_msg:
+            yield event.plain_result(reject_msg)
             return
 
         user_id = self._get_user_id(event)
-        key = f"confirm_delete_{user_id}"
-        
-        # 获取之前保存的状态
-        state = self.context.get_handler_record(key)
+        state = self._confirm_states.pop(user_id, None)
         if state is None:
             yield event.plain_result("⚠️ 没有待确认的删除操作，请先使用 /删除任务")
             return
 
         try:
             outcome = deps.require_task_manager().confirm_pending(user_id)
-            msg = render.render_delete_outcome(outcome)
+            msg = render.render_delete_done(outcome)
             yield event.plain_result(msg)
         except (TaskError, PipelineError) as e:
             yield event.plain_result(f"⚠️ {e}")
-        finally:
-            self.context.clear_handler_record(key)
 
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)
     @filter.command("修改任务")
     async def update_task(self, event: AstrMessageEvent):
         """管理员，修改任务字段"""
-        if not await self._is_admin(event):
-            yield event.plain_result("⚠️ 仅管理员可执行此操作")
-            return
-        if await self._reject_if_main_group(event):
+        self._group_origins[str(event.message_obj.group_id)] = event.unified_msg_origin
+
+        reject_msg = await self._reject_if_main_group(event)
+        if reject_msg:
+            yield event.plain_result(reject_msg)
             return
 
         args = self._split_args(event)
@@ -461,13 +512,16 @@ class SubflowPlugin(Star):
         except (TaskError, PipelineError, ValueError) as e:
             yield event.plain_result(f"⚠️ {e}")
 
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)
     @filter.command("归档")
     async def archive(self, event: AstrMessageEvent):
         """管理员，归档集"""
-        if not await self._is_admin(event):
-            yield event.plain_result("⚠️ 仅管理员可执行此操作")
-            return
-        if await self._reject_if_main_group(event):
+        self._group_origins[str(event.message_obj.group_id)] = event.unified_msg_origin
+
+        reject_msg = await self._reject_if_main_group(event)
+        if reject_msg:
+            yield event.plain_result(reject_msg)
             return
 
         args = self._split_args(event)
@@ -491,10 +545,15 @@ class SubflowPlugin(Star):
     # 任务操作命令
     # ================================================================
 
+    @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)
     @filter.command("接活")
     async def claim(self, event: AstrMessageEvent):
         """接活"""
-        if await self._reject_if_main_group(event):
+        self._group_origins[str(event.message_obj.group_id)] = event.unified_msg_origin
+
+        reject_msg = await self._reject_if_main_group(event)
+        if reject_msg:
+            yield event.plain_result(reject_msg)
             return
 
         args = self._split_args(event)
@@ -519,10 +578,15 @@ class SubflowPlugin(Star):
         except (TaskError, PipelineError) as e:
             yield event.plain_result(f"⚠️ {e}")
 
+    @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)
     @filter.command("完成")
     async def complete_task(self, event: AstrMessageEvent):
         """完成任务"""
-        if await self._reject_if_main_group(event):
+        self._group_origins[str(event.message_obj.group_id)] = event.unified_msg_origin
+
+        reject_msg = await self._reject_if_main_group(event)
+        if reject_msg:
+            yield event.plain_result(reject_msg)
             return
 
         args = self._split_args(event)
@@ -543,15 +607,20 @@ class SubflowPlugin(Star):
                 segment=segment, user_id=user_id,
             )
             msgs = render.render_complete_outcome(outcome)
-            for msg in msgs:
+            for msg in msgs if isinstance(msgs, list) else [msgs]:
                 yield event.plain_result(msg)
         except (TaskError, PipelineError) as e:
             yield event.plain_result(f"⚠️ {e}")
 
+    @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)
     @filter.command("放弃")
     async def abandon_task(self, event: AstrMessageEvent):
         """放弃任务"""
-        if await self._reject_if_main_group(event):
+        self._group_origins[str(event.message_obj.group_id)] = event.unified_msg_origin
+
+        reject_msg = await self._reject_if_main_group(event)
+        if reject_msg:
+            yield event.plain_result(reject_msg)
             return
 
         args = self._split_args(event)
@@ -576,10 +645,15 @@ class SubflowPlugin(Star):
         except (TaskError, PipelineError) as e:
             yield event.plain_result(f"⚠️ {e}")
 
+    @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)
     @filter.command("进行中")
     async def in_progress(self, event: AstrMessageEvent):
         """设置任务为进行中"""
-        if await self._reject_if_main_group(event):
+        self._group_origins[str(event.message_obj.group_id)] = event.unified_msg_origin
+
+        reject_msg = await self._reject_if_main_group(event)
+        if reject_msg:
+            yield event.plain_result(reject_msg)
             return
 
         args = self._split_args(event)
