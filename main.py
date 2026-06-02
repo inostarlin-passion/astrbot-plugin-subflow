@@ -592,7 +592,7 @@ class SubflowPlugin(Star):
         user_id = self._get_user_id(event)
 
         try:
-            outcome = deps.require_task_manager().claim_task(
+            outcome = await deps.require_task_manager().claim_task(
                 show=show_name, episode=episode, stage=stage,
                 segment=segment, user_qq=user_id,
             )
@@ -625,7 +625,7 @@ class SubflowPlugin(Star):
         user_id = self._get_user_id(event)
 
         try:
-            outcome = deps.require_task_manager().complete_task(
+            outcome = await deps.require_task_manager().complete_task(
                 show=show_name, episode=episode, stage=stage,
                 segment=segment, user_qq=user_id,
             )
@@ -659,7 +659,7 @@ class SubflowPlugin(Star):
         user_id = self._get_user_id(event)
 
         try:
-            outcome = deps.require_task_manager().abandon_task(
+            outcome = await deps.require_task_manager().abandon_task(
                 show=show_name, episode=episode, stage=stage,
                 segment=segment, user_qq=user_id,
             )
@@ -692,7 +692,7 @@ class SubflowPlugin(Star):
         user_id = self._get_user_id(event)
 
         try:
-            outcome = deps.require_task_manager().set_in_progress(
+            outcome = await deps.require_task_manager().set_in_progress(
                 show=show_name, episode=episode, stage=stage,
                 segment=segment, user_qq=user_id,
             )
@@ -717,7 +717,7 @@ class SubflowPlugin(Star):
         episode = args[1] if len(args) > 1 else None
 
         try:
-            records = deps.require_task_manager().list_episode(show=show_name, episode=episode)
+            records = await deps.require_task_manager().list_episode(show=show_name, episode=episode)
             msg = render.render_progress(show_name, episode, records)
             yield event.plain_result(msg)
         except (TaskError, PipelineError) as e:
@@ -729,7 +729,7 @@ class SubflowPlugin(Star):
         user_id = self._get_user_id(event)
 
         try:
-            tasks = deps.require_task_manager().list_my_tasks(user_id)
+            tasks = await deps.require_task_manager().list_my_tasks(user_id)
             if not tasks:
                 yield event.plain_result("你目前没有未完成任务")
                 return
@@ -745,7 +745,7 @@ class SubflowPlugin(Star):
         show_name = args[0] if args else None
 
         try:
-            tasks = deps.require_task_manager().list_available(show=show_name)
+            tasks = await deps.require_task_manager().list_available(show=show_name)
             if not tasks:
                 yield event.plain_result("当前没有待接任务" if not show_name else f"「{show_name}」没有待接任务")
                 return
