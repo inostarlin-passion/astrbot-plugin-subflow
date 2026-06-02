@@ -733,7 +733,7 @@ class SubflowPlugin(Star):
             if not tasks:
                 yield event.plain_result("你目前没有未完成任务")
                 return
-            msg = render.render_my_tasks(tasks, user_id)
+            msg = render.render_my_tasks(user_id, tasks)
             yield event.plain_result(msg)
         except TaskError as e:
             yield event.plain_result(f"⚠️ {e}")
