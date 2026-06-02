@@ -79,6 +79,21 @@ class SubflowPlugin(Star):
 
         from .config import Config
         cfg_dict = {k.lower(): v for k, v in cfg_dict.items()}
+        import json
+
+        # 将可能为JSON字符串的字段解析为Python对象
+        list_fields = [
+            'subflow_tencent_doc_keys',
+            'subflow_tencent_doc_rate_limit_rets',
+            'subflow_admin_qq_list',
+        ]
+        for field in list_fields:
+            value = cfg_dict.get(field)
+            if isinstance(value, str):
+                try:
+                    cfg_dict[field] = json.loads(value)
+                except (json.JSONDecodeError, TypeError):
+                    pass  # 保留原始值，让Pydantic报错以便调试
         config = Config(**cfg_dict)
         log.info("subflow 配置加载完成")
 
