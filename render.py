@@ -1,8 +1,23 @@
 """消息渲染层。
 
-把 task_manager 的 Outcome 翻译成 NoneBot Message（含 @ 段）。
+把 task_manager 的 Outcome 翻译成 QQ 消息文本（含 CQ 码 @ 段）。
 所有渲染是纯函数，方便单元测试。
 """
+
+# ★★★ 添加以下兼容代码，让原 NoneBot Message/MessageSegment 在 AstrBot 下也能工作 ★★★
+def Message(text=""):
+    """模拟 NoneBot 的 Message，返回纯文本字符串"""
+    return text
+
+class MessageSegment:
+    """模拟 NoneBot 的 MessageSegment，返回纯文本/CQ码"""
+    @staticmethod
+    def text(text: str) -> str:
+        return text
+    @staticmethod
+    def at(qq) -> str:
+        return f"[CQ:at,qq={qq}]"
+# ★★★ 兼容代码结束 ★★★
 
 from __future__ import annotations
 
