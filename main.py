@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import asyncio          # ★ 新增
 import logging
 from pathlib import Path
 from typing import Any
@@ -41,9 +42,11 @@ class SubflowPlugin(Star):
         # 用来存删除任务的二次确认状态
         self._confirm_states: dict[str, dict] = {}
 
-    @filter.on_astrbot_loaded()
-    async def on_astrbot_loaded(self):
-        """AstrBot 初始化完成后自动调用（替代 NoneBot 的 on_startup）"""
+        # ★ 立即启动异步初始化（使用 asyncio.create_task）
+        asyncio.create_task(self._async_init())
+
+    async def _async_init(self):
+        """立即初始化（替代 on_astrbot_loaded）"""
         if self._initialized:
             return
 
@@ -70,6 +73,7 @@ class SubflowPlugin(Star):
             if env_val is not None:
                 cfg_dict[key.lower()] = env_val
 
+        from .config import Config
         config = Config(**cfg_dict)
         log.info("subflow 配置加载完成")
 
@@ -89,7 +93,6 @@ class SubflowPlugin(Star):
 
     def _send_group_msg(self, group_id: int, message: str) -> None:
         """供 deps._on_sync_changes 调用的发送回调（同步接口，内部创建异步任务）"""
-        import asyncio
         asyncio.create_task(self._do_send_group_msg(group_id, message))
 
     async def _do_send_group_msg(self, group_id: int, message: str):
