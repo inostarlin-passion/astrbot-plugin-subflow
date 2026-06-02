@@ -530,7 +530,7 @@ class SubflowPlugin(Star):
                 show=show_name, episode=episode, stage=stage,
                 segment=segment, field=field, value=value,
             )
-            msg = render.render_update_outcome(outcome)
+            msg = render.render_update(outcome)
             yield event.plain_result(msg)
         except (TaskError, PipelineError, ValueError) as e:
             yield event.plain_result(f"⚠️ {e}")
@@ -560,7 +560,7 @@ class SubflowPlugin(Star):
                 show=show_name, episode=episode
             )
             for o in outcomes:
-                yield event.plain_result(render.render_archive_outcome(o))
+                yield event.plain_result(render.render_archive(o))
         except (TaskError, PipelineError) as e:
             yield event.plain_result(f"⚠️ {e}")
 
@@ -596,7 +596,7 @@ class SubflowPlugin(Star):
                 show=show_name, episode=episode, stage=stage,
                 segment=segment, user_qq=user_id,
             )
-            msg = render.render_claim_outcome(outcome)
+            msg = render.render_claim(outcome)
             yield event.plain_result(msg)
         except (TaskError, PipelineError) as e:
             yield event.plain_result(f"⚠️ {e}")
@@ -629,7 +629,7 @@ class SubflowPlugin(Star):
                 show=show_name, episode=episode, stage=stage,
                 segment=segment, user_qq=user_id,
             )
-            msgs = render.render_complete_outcome(outcome)
+            msgs = render.render_complete(outcome)
             for msg in msgs if isinstance(msgs, list) else [msgs]:
                 yield event.plain_result(msg)
         except (TaskError, PipelineError) as e:
@@ -663,7 +663,7 @@ class SubflowPlugin(Star):
                 show=show_name, episode=episode, stage=stage,
                 segment=segment, user_qq=user_id,
             )
-            msg = render.render_abandon_outcome(outcome)
+            msg = render.render_abandon(outcome)
             yield event.plain_result(msg)
         except (TaskError, PipelineError) as e:
             yield event.plain_result(f"⚠️ {e}")
@@ -696,7 +696,7 @@ class SubflowPlugin(Star):
                 show=show_name, episode=episode, stage=stage,
                 segment=segment, user_qq=user_id,
             )
-            msg = render.render_in_progress_outcome(outcome)
+            msg = render.render_in_progress(outcome)
             yield event.plain_result(msg)
         except (TaskError, PipelineError) as e:
             yield event.plain_result(f"⚠️ {e}")
@@ -733,7 +733,7 @@ class SubflowPlugin(Star):
             if not tasks:
                 yield event.plain_result("你目前没有未完成任务")
                 return
-            msg = render.render_user_tasks(tasks, user_id)
+            msg = render.render_my_tasks(tasks, user_id)
             yield event.plain_result(msg)
         except TaskError as e:
             yield event.plain_result(f"⚠️ {e}")
@@ -749,7 +749,7 @@ class SubflowPlugin(Star):
             if not tasks:
                 yield event.plain_result("当前没有待接任务" if not show_name else f"「{show_name}」没有待接任务")
                 return
-            msg = render.render_pending_tasks(tasks)
+            msg = render.render_available(tasks)
             yield event.plain_result(msg)
         except (TaskError, PipelineError) as e:
             yield event.plain_result(f"⚠️ {e}")
