@@ -729,7 +729,7 @@ class SubflowPlugin(Star):
         user_id = self._get_user_id(event)
 
         try:
-            tasks = await deps.require_task_manager().list_my_tasks(user_id)
+            tasks = deps.require_task_manager().list_my_tasks(user_id)
             if not tasks:
                 yield event.plain_result("你目前没有未完成任务")
                 return
@@ -745,7 +745,7 @@ class SubflowPlugin(Star):
         show_name = args[0] if args else None
 
         try:
-            tasks = await deps.require_task_manager().list_available(show=show_name)
+            tasks = deps.require_task_manager().list_available(show=show_name)
             if not tasks:
                 yield event.plain_result("当前没有待接任务" if not show_name else f"「{show_name}」没有待接任务")
                 return
