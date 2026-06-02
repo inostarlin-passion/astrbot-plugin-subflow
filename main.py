@@ -43,9 +43,13 @@ class SubflowPlugin(Star):
         self._confirm_states: dict[str, dict] = {}
 
         # ★ 立即启动异步初始化（使用 asyncio.create_task）
+        log.info("subflow __init__ 执行，准备创建异步初始化任务")
+        import asyncio
         asyncio.create_task(self._async_init())
+        log.info("subflow __init__ 完成，异步任务已创建")
 
     async def _async_init(self):
+        log.info("subflow _async_init 方法被执行")
         """立即初始化（替代 on_astrbot_loaded）"""
         if self._initialized:
             return
