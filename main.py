@@ -14,9 +14,9 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from astrbot.api.event import filter, AstrMessageEvent
-from astrbot.api.star import Context, Star
-from astrbot.api import logger as astr_logger
+from astrbot.api.event import filter, AstrMessageEvent # type: ignore
+from astrbot.api.star import Context, Star # type: ignore
+from astrbot.api import logger as astr_logger # type: ignore
 
 # 复用原有业务模块（完全不需要改）
 from . import deps, render
@@ -120,7 +120,7 @@ class SubflowPlugin(Star):
         """实际发送群消息"""
         origin = self._group_origins.get(str(group_id))
         if origin:
-            from astrbot.api.event import MessageChain
+            from astrbot.api.event import MessageChain # type: ignore
             chain = MessageChain().message(message)
             await self.context.send_message(origin, chain)
         else:
