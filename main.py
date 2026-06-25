@@ -41,19 +41,55 @@ class SubflowPlugin(Star):
         self._group_origins: dict[str, str] = {}
         # 用来存删除任务的二次确认状态
         self._confirm_states: dict[str, dict] = {}
+        self._init_task: asyncio.Task | None = None
 
-        # ★ 立即启动异步初始化（使用 asyncio.create_task）
-        log.info("subflow __init__ 执行，准备创建异步初始化任务")
-        import asyncio
-        asyncio.create_task(self._async_init())
-        log.info("subflow __init__ 完成，异步任务已创建")
+        log.info("subflow __init__ 完成，准备调度异步初始化")
+        try:
+            loop = asyncio.get_running_loop()
+            loop.call_soon(self._schedule_async_init)
+        except RuntimeError:
+            log.warning("subflow 未找到运行中的事件循环，将等待 AstrBot loaded hook 初始化")
+
+    def _schedule_async_init(self):
+        if self._initialized:
+            return
+        if self._init_task and not self._init_task.done():
+            return
+        log.info("subflow 创建异步初始化 task")
+        self._init_task = asyncio.create_task(
+            self._async_init(),
+            name="subflow_async_init",
+        )
+        self._init_task.add_done_callback(self._on_init_done)
+
+    def _on_init_done(self, task: asyncio.Task):
+        if task.cancelled():
+            log.warning("subflow 初始化 task 已取消")
+            return
+        exc = task.exception()
+        if exc:
+            log.error(
+                "subflow 初始化 task 失败",
+                exc_info=(type(exc), exc, exc.__traceback__),
+            )
+            return
+        log.info("subflow 初始化 task 已完成")
+
+    @filter.on_astrbot_loaded()
+    async def on_astrbot_loaded(self):
+        """AstrBot 生命周期就绪后初始化依赖。"""
+        await self._ensure_initialized()
+
+    async def initialize(self):
+        """AstrBot 插件实例化后的初始化入口。"""
+        await self._ensure_initialized()
 
     async def _async_init(self):
-        log.info("subflow _async_init 方法被执行")
         """立即初始化（替代 on_astrbot_loaded）"""
         if self._initialized:
             return
 
+        log.info("subflow _async_init 方法被执行")
         log.info("subflow 插件开始初始化...")
 
         # 1. 读取配置
@@ -72,6 +108,7 @@ class SubflowPlugin(Star):
             "SUBFLOW_TOKEN_WARN_DAYS", "SUBFLOW_DATA_DIR",
             "SUBFLOW_DEFAULT_PIPELINE", "SUBFLOW_NOTIFY_EXTERNAL_CHANGES",
             "SUBFLOW_EXTERNAL_CHANGE_DIGEST_THRESHOLD",
+            "TENCENT_DOC_DEFAULT_FILE_ID",
         ]:
             env_val = os.environ.get(key)
             if env_val is not None:
@@ -107,6 +144,24 @@ class SubflowPlugin(Star):
 
         self._initialized = True
         log.info("subflow 插件初始化完成")
+
+    async def _ensure_initialized(self) -> None:
+        """确保插件依赖已完成初始化，供生命周期 hook 与命令入口共同使用。"""
+        if self._initialized:
+            return
+
+        if self._init_task and not self._init_task.done():
+            await self._init_task
+            return
+
+        self._schedule_async_init()
+        if self._init_task:
+            await self._init_task
+        elif not self._initialized:
+            await self._async_init()
+
+        if not self._initialized:
+            raise RuntimeError("subflow 插件初始化未完成")
 
     # ================================================================
     # 主动消息发送（给 deps._on_sync_changes 用）
@@ -145,6 +200,7 @@ class SubflowPlugin(Star):
 
     async def _is_admin(self, event: AstrMessageEvent) -> bool:
         """判断用户是否为管理员（群主/群管/超管）"""
+        await self._ensure_initialized()
         user_id = self._get_user_id(event)
         group_id = self._get_group_id(event)
 
@@ -163,6 +219,7 @@ class SubflowPlugin(Star):
 
     async def _reject_if_main_group(self, event: AstrMessageEvent) -> str | None:
         """D9：总群拒绝写操作。返回拒绝文本（非空表示应终止处理）"""
+        await self._ensure_initialized()
         group_id = self._get_group_id(event)
         if group_id and deps.require_bindings().is_main_group(group_id):
             return "⚠️ 写操作请到对应工作群执行，总群仅支持查询"
@@ -290,6 +347,7 @@ class SubflowPlugin(Star):
     @filter.command("绑定列表")
     async def bind_list(self, event: AstrMessageEvent):
         """查看绑定列表。全部 需超管"""
+        await self._ensure_initialized()
         args = self._split_args(event)
         show_all = "全部" in args
 
@@ -361,6 +419,7 @@ class SubflowPlugin(Star):
     @filter.command("查看流水线")
     async def view_pipeline(self, event: AstrMessageEvent):
         """查看流水线"""
+        await self._ensure_initialized()
         args = self._split_args(event)
         if len(args) < 1:
             yield event.plain_result("⚠️ 格式：/查看流水线 <番剧名>")
@@ -709,6 +768,7 @@ class SubflowPlugin(Star):
     @filter.command("进度")
     async def progress(self, event: AstrMessageEvent):
         """查看进度看板"""
+        await self._ensure_initialized()
         args = self._split_args(event)
         if len(args) < 1:
             yield event.plain_result("⚠️ 格式：/进度 <番剧名> [集数]")
@@ -727,6 +787,7 @@ class SubflowPlugin(Star):
     @filter.command("我的任务")
     async def my_tasks(self, event: AstrMessageEvent):
         """查看我的任务"""
+        await self._ensure_initialized()
         user_id = self._get_user_id(event)
 
         try:
@@ -742,6 +803,7 @@ class SubflowPlugin(Star):
     @filter.command("待接")
     async def pending(self, event: AstrMessageEvent):
         """查看待接任务列表"""
+        await self._ensure_initialized()
         args = self._split_args(event)
         show_name = args[0] if args else None
 

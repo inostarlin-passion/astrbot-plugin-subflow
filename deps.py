@@ -177,24 +177,6 @@ async def _on_sync_changes(diffs: dict[tuple[str, str], SheetDiff]) -> None:
             log.exception("外部变更提醒推送失败：%s", entry.alias)
 
 
-    threshold = config.subflow_external_change_digest_threshold
-    for (file_id, sheet_id), diff in diffs.items():
-        entry = bindings.get_by_sheet(file_id, sheet_id)
-        if entry is None:
-            continue  # 未绑定的子表（理论上不会进到这）
-        try:
-            report = task_manager.interpret_external_changes(entry.alias, diff)
-            if report.is_empty():
-                continue
-            messages = render.render_external_changes(
-                report, digest_threshold=threshold
-            )
-            for msg in messages:
-                await send_func(group_id=entry.group_id, message=msg)
-        except Exception:  # noqa: BLE001
-            log.exception("外部变更提醒推送失败：%s", entry.alias)
-
-
 def require_task_manager() -> TaskManager:
     if task_manager is None:
         raise RuntimeError("subflow 插件未完成初始化（task_manager 为空）")
